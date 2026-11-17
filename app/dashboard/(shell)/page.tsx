@@ -18,6 +18,7 @@ import { WorkspaceTips } from "@/components/dashboard/workspace-tips";
 import { WidgetGrid } from "@/components/dashboard/widget-grid";
 import { buttonVariants } from "@/components/ui/button";
 import { listAgentsForUser } from "@/lib/agents";
+import { getAgentModelCatalog } from "@/lib/agent-model-catalog";
 import { countSchedulesForUser } from "@/lib/agent-schedules";
 import { getAppAccountLabels, getConnectedToolkits } from "@/lib/composio/connections";
 import { getDashboardForUser } from "@/lib/dashboards";
@@ -49,12 +50,13 @@ export default async function DashboardPage() {
   const user = await requireUser();
   const profile = await ensureUserRecord(user);
   const dashboard = await getDashboardForUser(user.id);
-  const [widgets, agents, apps, scheduleCount, appAccounts] = await Promise.all([
+  const [widgets, agents, apps, scheduleCount, appAccounts, models] = await Promise.all([
     listWidgetsForUser(profile.id, dashboard?.id ?? null),
-    listAgentsForUser(profile.id),
+    listAgentsForUser(profile.id, dashboard?.id ?? null),
     getConnectedToolkits(profile.id),
     countSchedulesForUser(profile.id),
     getAppAccountLabels(profile.id),
+    getAgentModelCatalog(profile.id),
   ]);
 
   if (widgets.length === 0) {
@@ -256,6 +258,8 @@ export default async function DashboardPage() {
       <WidgetGrid
         initialWidgets={widgets}
         background={dashboard?.appearance ?? null}
+        models={models}
+        agents={agents}
         connectedApps={apps}
         appAccounts={appAccounts}
       />

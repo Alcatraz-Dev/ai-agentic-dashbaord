@@ -16,6 +16,8 @@ export type ChatToolStep = {
   startedAt?: number;
   /** How long the finished call took, in ms. */
   duration?: number;
+  /** What the call worked on — a file path, a folder, a search query. */
+  detail?: string;
 };
 
 /** A page the reply cited, rendered as a clickable source under the message. */
@@ -25,6 +27,7 @@ export type ChatSource = {
 };
 
 import type { AgentResultCard } from "@/lib/apps/results";
+import type { AgentHandoffResult } from "@/lib/agent-team";
 
 export type ChatMessage = {
   id: string;
@@ -40,4 +43,6 @@ export type ChatMessage = {
   steps?: ChatToolStep[];
   /** Sources a web search leaned on. */
   sources?: ChatSource[];
+  /** Teammate answers this reply used; kept so a reload shows them. */
+  handoffs?: AgentHandoffResult[];
 };

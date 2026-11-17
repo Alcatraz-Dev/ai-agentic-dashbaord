@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import type { CustomDiagramSummary } from "@/lib/custom-diagram-types";
 import type { CustomPluginSummary } from "@/lib/custom-plugin-types";
 import type { CustomSkillSummary } from "@/lib/custom-skill-types";
+import type { TemplateToolScope } from "@/lib/template-workspaces";
 
 type LibraryRow = {
   key: string;
@@ -29,6 +30,8 @@ function LibraryGroup({
   rows,
   empty,
   busy,
+  disabled = false,
+  disabledNote,
 }: {
   label: string;
   on: number;
@@ -36,6 +39,9 @@ function LibraryGroup({
   rows: LibraryRow[];
   empty: React.ReactNode;
   busy: boolean;
+  /** The board's template switched this whole group off for its runs. */
+  disabled?: boolean;
+  disabledNote?: string;
 }) {
   return (
     <div className="mt-3">
@@ -43,9 +49,13 @@ function LibraryGroup({
         <p className="text-[0.65rem] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
           {label}
         </p>
-        <span className="text-[0.66rem] text-muted-foreground tabular-nums">
-          {on}/{total} on
-        </span>
+        {disabled ? (
+          <span className="text-[0.6rem] font-medium text-muted-foreground">Off on this board</span>
+        ) : (
+          <span className="text-[0.66rem] text-muted-foreground tabular-nums">
+            {on}/{total} on
+          </span>
+        )}
       </div>
 
       {rows.length === 0 ? (
@@ -66,7 +76,7 @@ function LibraryGroup({
                   size="sm"
                   className="mt-0.5 shrink-0"
                   checked={active}
-                  disabled={busy}
+                  disabled={busy || disabled}
                   onCheckedChange={() => row.onToggle()}
                   aria-label={`${active ? "Turn off" : "Turn on"} ${row.name}`}
                 />
@@ -75,6 +85,10 @@ function LibraryGroup({
           })}
         </div>
       )}
+
+      {disabled && disabledNote ? (
+        <p className="mt-1.5 text-[0.66rem] leading-snug text-muted-foreground">{disabledNote}</p>
+      ) : null}
     </div>
   );
 }
@@ -98,6 +112,7 @@ export function AgentLibrarySection({
   skills = [],
   plugins = [],
   diagrams = [],
+  scope = null,
 }: {
   agentId: number;
   /** Stored skill names; null means every workspace skill. */
@@ -109,6 +124,8 @@ export function AgentLibrarySection({
   skills?: CustomSkillSummary[];
   plugins?: CustomPluginSummary[];
   diagrams?: CustomDiagramSummary[];
+  /** The board's ceiling. A group the template switched off is shown read-only. */
+  scope?: TemplateToolScope | null;
 }) {
   const router = useRouter();
   const [skillNames, setSkillNames] = useState<string[]>(
@@ -239,6 +256,8 @@ export function AgentLibrarySection({
         on={skillNames.length}
         total={skills.length}
         busy={saving !== null}
+        disabled={scope ? !scope.skills : false}
+        disabledNote="This dashboard's template runs without workspace skills, so the switches here can't apply."
         rows={skills.map((skill) => ({
           key: `skill-${skill.id}`,
           name: skill.name,
@@ -262,6 +281,8 @@ export function AgentLibrarySection({
         on={diagramNames.length}
         total={diagrams.length}
         busy={saving !== null}
+        disabled={scope ? !scope.diagrams : false}
+        disabledNote="This dashboard's template runs without diagrams. A board built for engineering or research can use them."
         rows={diagrams.map((diagram) => ({
           key: `diagram-${diagram.id}`,
           name: diagram.name,
@@ -285,6 +306,8 @@ export function AgentLibrarySection({
         on={pluginSlugs.length}
         total={plugins.length}
         busy={saving !== null}
+        disabled={scope ? !scope.plugins : false}
+        disabledNote="This dashboard's template runs without plugins, so the switches here can't apply."
         rows={plugins.map((plugin) => ({
           key: `plugin-${plugin.id}`,
           name: plugin.name,

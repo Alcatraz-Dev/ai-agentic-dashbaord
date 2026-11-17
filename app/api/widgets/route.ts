@@ -96,6 +96,19 @@ export async function POST(request: Request) {
       return Response.json({ error: "That agent could not be found." }, { status: 404 });
     }
 
+    // Agents belong to a dashboard, and so do widgets: a card can only be
+    // created by an agent of the board it lands on. Rows from before that
+    // column existed (null) still qualify.
+    if (agent.dashboardId !== null && agent.dashboardId !== dashboard.id) {
+      return Response.json(
+        {
+          error:
+            "That agent belongs to a different dashboard. Switch dashboards and ask again.",
+        },
+        { status: 409 },
+      );
+    }
+
     const available = await isWidgetDesignAvailableForUser(profile.id, design);
     if (!available) {
       return Response.json(

@@ -454,7 +454,6 @@ export function MemoryGraphView({
             const radius = radiusOf(entry);
 
             const common = {
-              key: entry.id,
               opacity: dim ? 0.22 : 1,
               className: "cursor-pointer outline-none",
               onMouseEnter: () => setFocused(entry.id),
@@ -473,7 +472,7 @@ export function MemoryGraphView({
             };
 
             return (
-              <g {...common} transform={`translate(${entry.x} ${entry.y})`}>
+              <g key={entry.id} {...common} transform={`translate(${entry.x} ${entry.y})`}>
                 {isActive ? (
                   <>
                     <circle r={radius * 2.6} fill={colour} opacity={0.34} filter={`url(#${glowId})`} />

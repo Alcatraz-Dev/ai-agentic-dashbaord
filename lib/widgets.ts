@@ -1,7 +1,8 @@
 import "server-only";
 
-import { and, asc, desc, eq, isNull, lte, or } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, lte, or, sql } from "drizzle-orm";
 
+import { getAgentModelForUser } from "@/lib/agent-models";
 import { deleteJobsSchedule } from "@/lib/jobs";
 import { nextRunForRule, scheduleRuleFromCron, type ScheduleRule } from "@/lib/schedule-rule";
 import {
@@ -28,13 +29,17 @@ import { getDashboardStarters } from "@/lib/dashboard-starters";
 import { agents, dashboards, db, users, widgetRefreshRuns, widgets } from "@/db";
 import {
   effectiveWidgetForm,
+  isWidgetDesignKey,
+  isWidgetForm,
   isWidgetIllustrationKey,
   normalizeWidgetEdit,
   mergeWidgetData,
   widgetDesignComboUsed,
   widgetFormSupported,
+  type WidgetDesignKey,
   type WidgetDesignOption,
   type WidgetEdit,
+  type WidgetForm,
   type WidgetPayload,
   type WidgetProposal,
   type WidgetRecord,
@@ -69,6 +74,7 @@ const recordColumns = {
   appearance: widgets.appearance,
   locked: widgets.locked,
   sourcePrompt: widgets.sourcePrompt,
+  editModel: widgets.editModel,
   refreshMinutes: widgets.refreshMinutes,
   refreshCron: widgets.refreshCron,
   refreshTimezone: widgets.refreshTimezone,
@@ -90,6 +96,7 @@ const recordColumns = {
   agentName: agents.name,
   agentAvatar: agents.avatar,
   agentColor: agents.color,
+  agentProvider: agents.provider,
 };
 
 type RecordRow = {
@@ -109,6 +116,7 @@ type RecordRow = {
   appearance: WidgetRecord["appearance"];
   locked: boolean;
   sourcePrompt: string | null;
+  editModel: string | null;
   refreshMinutes: number;
   refreshCron: string;
   refreshTimezone: string | null;
@@ -130,6 +138,7 @@ type RecordRow = {
   agentName: string;
   agentAvatar: string;
   agentColor: string;
+  agentProvider: string;
 };
 
 function iso(value: Date | null): string | null {
@@ -143,6 +152,7 @@ function serialize(row: RecordRow): WidgetRecord {
     agentName: row.agentName,
     agentAvatar: row.agentAvatar,
     agentColor: row.agentColor,
+    agentProvider: row.agentProvider,
     title: row.title,
     subtitle: row.subtitle,
     icon: row.icon as WidgetRecord["icon"],
@@ -161,6 +171,7 @@ function serialize(row: RecordRow): WidgetRecord {
     appearance: row.appearance ? normalizeWidgetAppearance(row.appearance) : null,
     locked: row.locked,
     sourcePrompt: row.sourcePrompt,
+    editModel: row.editModel,
     refreshMinutes: row.refreshMinutes,
     scheduleRule: widgetScheduleRule(row),
     refreshCron: row.refreshCron,
@@ -289,7 +300,7 @@ export async function createWidgetForUser(input: {
   if (!Number.isInteger(agentId) || agentId <= 0) return null;
 
   const [agent] = await db
-    .select({ id: agents.id })
+    .select({ id: agents.id, dashboardId: agents.dashboardId })
     .from(agents)
     .where(and(eq(agents.id, agentId), eq(agents.ownerId, profileId)))
     .limit(1);
@@ -302,6 +313,10 @@ export async function createWidgetForUser(input: {
     .where(and(eq(dashboards.id, dashboardId), eq(dashboards.ownerId, profileId)))
     .limit(1);
   if (!dashboard) return null;
+
+  // Agents belong to a dashboard, so only this board's agents can create its
+  // widgets. Rows created before the column existed (null) still count.
+  if (agent.dashboardId !== null && agent.dashboardId !== dashboard.id) return null;
 
   if (!widgetFormSupported(proposal.data, design.form)) return null;
   if (!(await isWidgetDesignAvailableForUser(profileId, design))) return null;
@@ -379,7 +394,7 @@ export async function createDiagramWidgetForUser(input: {
   if (!Number.isInteger(agentId) || agentId <= 0) return null;
 
   const [agent] = await db
-    .select({ id: agents.id })
+    .select({ id: agents.id, dashboardId: agents.dashboardId })
     .from(agents)
     .where(and(eq(agents.id, agentId), eq(agents.ownerId, profileId)))
     .limit(1);
@@ -391,6 +406,9 @@ export async function createDiagramWidgetForUser(input: {
     .where(and(eq(dashboards.id, dashboardId), eq(dashboards.ownerId, profileId)))
     .limit(1);
   if (!dashboard) return null;
+
+  // A widget belongs to an agent of the dashboard it lives on.
+  if (agent.dashboardId !== null && agent.dashboardId !== dashboard.id) return null;
 
   const existing = await db
     .select({ size: widgets.size, positionY: widgets.positionY })
@@ -475,7 +493,7 @@ export async function createStarterWidgetsForUser(input: {
   if (!Number.isInteger(agentId) || agentId <= 0) return 0;
 
   const [agent] = await db
-    .select({ id: agents.id })
+    .select({ id: agents.id, dashboardId: agents.dashboardId })
     .from(agents)
     .where(and(eq(agents.id, agentId), eq(agents.ownerId, profileId)))
     .limit(1);
@@ -487,6 +505,9 @@ export async function createStarterWidgetsForUser(input: {
     .where(and(eq(dashboards.id, dashboardId), eq(dashboards.ownerId, profileId)))
     .limit(1);
   if (!dashboard) return 0;
+
+  // Starter cards belong to this board's own agent, never another board's.
+  if (agent.dashboardId !== null && agent.dashboardId !== dashboard.id) return 0;
 
   const existing = await db
     .select({
@@ -731,6 +752,141 @@ export async function updateWidgetAppearanceForUser(
   const [updated] = await db
     .update(widgets)
     .set({ appearance, updatedAt: new Date() })
+    .where(and(eq(widgets.id, widgetId), eq(widgets.ownerId, profileId)))
+    .returning({ id: widgets.id });
+
+  return updated ? getWidgetForUser(profileId, widgetId) : null;
+}
+
+/** Stores a new design (style) key for one widget; the owner's direct pick. */
+export async function updateWidgetDesignForUser(
+  profileId: number,
+  widgetId: number,
+  design: WidgetDesignKey,
+): Promise<WidgetRecord | null> {
+  if (!Number.isInteger(widgetId) || widgetId <= 0) return null;
+  if (!isWidgetDesignKey(design)) return null;
+
+  const [updated] = await db
+    .update(widgets)
+    .set({ design, updatedAt: new Date() })
+    .where(and(eq(widgets.id, widgetId), eq(widgets.ownerId, profileId)))
+    .returning({ id: widgets.id });
+
+  return updated ? getWidgetForUser(profileId, widgetId) : null;
+}
+
+/**
+ * Widget counts per dashboard, for the "Your dashboards" dialog. One grouped
+ * query, so the shell never loads every widget's payload just to count them.
+ */
+export async function countWidgetsByDashboardForUser(
+  profileId: number,
+): Promise<Record<number, number>> {
+  const rows = await db
+    .select({ dashboardId: widgets.dashboardId, total: sql<number>`count(*)::int` })
+    .from(widgets)
+    .where(eq(widgets.ownerId, profileId))
+    .groupBy(widgets.dashboardId);
+
+  const counts: Record<number, number> = {};
+  for (const row of rows) {
+    if (row.dashboardId === null) continue;
+    counts[row.dashboardId] = Number(row.total) || 0;
+  }
+  return counts;
+}
+
+/**
+ * Remembers which model this widget's "Edit with AI" should start on. Only a
+ * built-in key or a saved model the owner still has is accepted; an empty value
+ * clears it back to the owning agent's model.
+ */
+export async function setWidgetEditModelForUser(
+  profileId: number,
+  widgetId: number,
+  modelKey: string | null,
+): Promise<boolean> {
+  if (!Number.isInteger(widgetId) || widgetId <= 0) return false;
+
+  const key = typeof modelKey === "string" ? modelKey.trim() : "";
+  if (key && !key.startsWith("ai:") && !key.startsWith("custom:")) return false;
+
+  if (key.startsWith("custom:")) {
+    const savedId = Number(key.slice("custom:".length));
+    if (!Number.isInteger(savedId) || savedId <= 0) return false;
+    const saved = await getAgentModelForUser(profileId, savedId);
+    if (!saved) return false;
+  }
+
+  const [updated] = await db
+    .update(widgets)
+    .set({ editModel: key || null, updatedAt: new Date() })
+    .where(and(eq(widgets.id, widgetId), eq(widgets.ownerId, profileId)))
+    .returning({ id: widgets.id });
+
+  return Boolean(updated);
+}
+
+/**
+ * Moves a widget to another agent, but only one on the same dashboard.
+ *
+ * A card and its agent must live on the same board: otherwise its "Edit with
+ * agent" link would open a chat on a dashboard the owner is not looking at.
+ * Returns null for a foreign widget, a foreign agent or a different board.
+ */
+export async function setWidgetAgentForUser(
+  profileId: number,
+  widgetId: number,
+  agentId: number,
+): Promise<WidgetRecord | null> {
+  if (!Number.isInteger(widgetId) || widgetId <= 0) return null;
+  if (!Number.isInteger(agentId) || agentId <= 0) return null;
+
+  const [target] = await db
+    .select({ id: agents.id, dashboardId: agents.dashboardId })
+    .from(agents)
+    .where(and(eq(agents.id, agentId), eq(agents.ownerId, profileId)))
+    .limit(1);
+  if (!target) return null;
+
+  const [row] = await db
+    .select({ dashboardId: widgets.dashboardId })
+    .from(widgets)
+    .where(and(eq(widgets.id, widgetId), eq(widgets.ownerId, profileId)))
+    .limit(1);
+  if (!row || target.dashboardId !== row.dashboardId) return null;
+
+  const [updated] = await db
+    .update(widgets)
+    .set({ agentId, updatedAt: new Date() })
+    .where(and(eq(widgets.id, widgetId), eq(widgets.ownerId, profileId)))
+    .returning({ id: widgets.id });
+  if (!updated) return null;
+
+  return getWidgetForUser(profileId, widgetId);
+}
+
+/**
+ * Stores a different visual form for one widget. Only a form the stored data can
+ * actually draw is accepted, so a resize never turns a chart into an invented
+ * trend.
+ */
+export async function updateWidgetFormForUser(
+  profileId: number,
+  widgetId: number,
+  form: WidgetForm,
+): Promise<WidgetRecord | null> {
+  if (!Number.isInteger(widgetId) || widgetId <= 0) return null;
+  if (!isWidgetForm(form)) return null;
+
+  const current = await getWidgetForUser(profileId, widgetId);
+  if (!current) return null;
+  if (!widgetFormSupported(current.data, form)) return null;
+
+  const [updated] = await db
+    .update(widgets)
+    .set({ form, chart: form, updatedAt: new Date() })
     .where(and(eq(widgets.id, widgetId), eq(widgets.ownerId, profileId)))
     .returning({ id: widgets.id });
 

@@ -34,6 +34,7 @@ import {
   spanFor,
   type LayoutWidget,
 } from "@/lib/widget-layout";
+import type { AgentModelCatalog, AgentSummary } from "@/lib/agent-options";
 import type { AppAccountSummary } from "@/lib/integrations/types";
 import type { WidgetRecord, WidgetSize } from "@/lib/widget-types";
 import { cn } from "@/lib/utils";
@@ -193,11 +194,21 @@ export function WidgetGrid({
   initialWidgets,
   background,
   autoCatchUp = true,
+  models,
+  agents,
   connectedApps,
   appAccounts,
 }: {
   initialWidgets: WidgetRecord[];
   background?: DashboardAppearance | null;
+  /** Model list offered by each widget's "Edit with AI". */
+  models?: AgentModelCatalog;
+  /**
+   * This dashboard's agents. Every board keeps its own team, so “Edit with
+   * agent” resolves against these instead of the widget's stored agent id,
+   * which can belong to a dashboard the owner is no longer looking at.
+   */
+  agents?: AgentSummary[];
   /** Off for previews and tests: the catch-up action needs a signed-in owner. */
   autoCatchUp?: boolean;
   /** Toolkits with an active account, so app rows can offer Connect. */
@@ -500,6 +511,12 @@ export function WidgetGrid({
       return;
     }
 
+    // Dialogs, menus and popovers opened from a card are React children of that
+    // card but live in a portal outside its DOM. Without this guard the handler
+    // called preventDefault() on their pointerdown, so a field like the "Edit
+    // with AI" prompt could never take focus or text.
+    if (!(event.currentTarget as HTMLElement).contains(target)) return;
+
     event.preventDefault();
     event.stopPropagation();
 
@@ -674,6 +691,10 @@ export function WidgetGrid({
             const span = spanFor(widget.size, columns);
             const dragging = drag?.id === widget.id;
             const moving = dragging && drag?.mode === "move";
+            // Prefer the agent that owns this card, but only if it lives on this
+            // dashboard; otherwise hand the edit to this board's first agent.
+            const editAgent =
+              agents?.find((agent) => agent.id === widget.agentId) ?? agents?.[0] ?? null;
 
             return (
               <div
@@ -711,6 +732,7 @@ export function WidgetGrid({
                     >
                       <WidgetMenu
                         widget={widget}
+                        catalog={models}
                         onDelete={() => remove(widget)}
                         onRefresh={() => refresh(widget)}
                         onResize={(size) => void changeSize(widget, size)}
@@ -720,7 +742,12 @@ export function WidgetGrid({
                         onDuplicate={() => void duplicate(widget)}
                         onToggleLock={() => void toggleLock(widget)}
                         onResetDesign={() => void resetDesign(widget)}
-                        editHref={`/dashboard/agents/${widget.agentId}?editWidget=${widget.id}`}
+                        editAgentName={editAgent?.name}
+                        editHref={
+                          editAgent
+                            ? `/dashboard/agents/${editAgent.id}?editWidget=${widget.id}`
+                            : undefined
+                        }
                       />
                     </div>
                   }
@@ -788,6 +815,8 @@ export function WidgetGrid({
 
       <WidgetCustomizeDrawer
         widget={customizing}
+        models={models}
+        agents={agents}
         open={customizing !== null}
         onOpenChange={(open) => {
           if (!open) setCustomizingId(null);

@@ -5,6 +5,8 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/session";
 import { ensureUserRecord } from "@/lib/users";
 import {
+  isWidgetDesignKey,
+  isWidgetForm,
   isWidgetSize,
   type WidgetEditProposal,
   type WidgetRecord,
@@ -16,8 +18,12 @@ import {
   duplicateWidgetForUser,
   getWidgetForUser,
   resizeWidgetForUser,
+  setWidgetAgentForUser,
+  setWidgetEditModelForUser,
   setWidgetLockedForUser,
   updateWidgetAppearanceForUser,
+  updateWidgetDesignForUser,
+  updateWidgetFormForUser,
   updateWidgetLayoutForUser,
   updateWidgetScheduleForUser,
 } from "@/lib/widgets";
@@ -133,6 +139,58 @@ export async function updateWidgetAppearanceAction(input: {
   }
 }
 
+/** Saves a new design (style) for one widget, picked from the customize drawer. */
+export async function updateWidgetDesignAction(input: {
+  id: number;
+  design: string;
+}): Promise<{ ok: true; widget: WidgetRecord } | { ok: false; error: string }> {
+  const id = widgetId(input.id);
+  if (!id) return { ok: false, error: "That widget could not be found." };
+  if (!isWidgetDesignKey(input.design)) {
+    return { ok: false, error: "That style isn't available." };
+  }
+
+  const user = await requireUser();
+  const profile = await ensureUserRecord(user);
+
+  try {
+    const widget = await updateWidgetDesignForUser(profile.id, id, input.design);
+    if (!widget) return { ok: false, error: "That widget could not be found." };
+
+    revalidatePath("/dashboard");
+    return { ok: true, widget };
+  } catch (error) {
+    console.error("[widgets] design update failed", error);
+    return { ok: false, error: "We couldn't save that style. Please try again." };
+  }
+}
+
+/** Saves a different visual form, when the stored data can draw it. */
+export async function updateWidgetFormAction(input: {
+  id: number;
+  form: unknown;
+}): Promise<{ ok: true; widget: WidgetRecord } | { ok: false; error: string }> {
+  const id = widgetId(input.id);
+  if (!id) return { ok: false, error: "That widget could not be found." };
+  if (!isWidgetForm(input.form)) return { ok: false, error: "That form isn't available." };
+
+  const user = await requireUser();
+  const profile = await ensureUserRecord(user);
+
+  try {
+    const widget = await updateWidgetFormForUser(profile.id, id, input.form);
+    if (!widget) {
+      return { ok: false, error: "This widget's data can't be drawn that way." };
+    }
+
+    revalidatePath("/dashboard");
+    return { ok: true, widget };
+  } catch (error) {
+    console.error("[widgets] form update failed", error);
+    return { ok: false, error: "We couldn't save that form. Please try again." };
+  }
+}
+
 /** Lock/unlock one widget against dragging and resizing. */
 export async function setWidgetLockAction(input: {
   id: number;
@@ -232,6 +290,8 @@ export async function catchUpWidgetsAction(): Promise<
 export async function requestWidgetEditAction(input: {
   id: number;
   request: string;
+  /** Optional model key for this one edit; defaults to the widget's agent. */
+  modelKey?: string | null;
 }): Promise<
   { ok: true; proposal: WidgetEditProposal } | { ok: false; error: string }
 > {
@@ -242,7 +302,21 @@ export async function requestWidgetEditAction(input: {
   const profile = await ensureUserRecord(user);
 
   try {
-    return await proposeWidgetEditForUser(profile.id, id, input.request);
+    const modelKey = typeof input.modelKey === "string" ? input.modelKey.trim() : "";
+    const result = await proposeWidgetEditForUser(profile.id, id, input.request, {
+      modelKey: modelKey || null,
+    });
+
+    // Remember the choice so the next edit of this card starts on the same
+    // model. Only stored after a proposal succeeded, so a rejected model can
+    // never become the saved default.
+    if (result.ok && modelKey) {
+      await setWidgetEditModelForUser(profile.id, id, modelKey).catch((error) =>
+        console.error("[widgets] could not remember the edit model", error),
+      );
+    }
+
+    return result;
   } catch (error) {
     console.error("[widgets] edit request failed", error);
     return { ok: false, error: "We couldn't prepare that change. Please try again." };
@@ -335,5 +409,63 @@ export async function deleteWidgetAction(input: { id: number }): Promise<WidgetA
   } catch (error) {
     console.error("[widgets] delete failed", error);
     return { ok: false, error: "We couldn't delete that widget. Please try again." };
+  }
+}
+
+/** Moves a widget to another agent that lives on the same dashboard. */
+export async function setWidgetAgentAction(input: {
+  id: number;
+  agentId: number;
+}): Promise<{ ok: true; widget: WidgetRecord } | { ok: false; error: string }> {
+  const id = widgetId(input.id);
+  const agentId = Number(input.agentId);
+  if (!id) return { ok: false, error: "That widget could not be found." };
+  if (!Number.isInteger(agentId) || agentId <= 0) {
+    return { ok: false, error: "That agent could not be found." };
+  }
+
+  const user = await requireUser();
+  const profile = await ensureUserRecord(user);
+
+  try {
+    const widget = await setWidgetAgentForUser(profile.id, id, agentId);
+    if (!widget) {
+      return { ok: false, error: "That agent isn't part of this dashboard." };
+    }
+
+    revalidatePath("/dashboard");
+    return { ok: true, widget };
+  } catch (error) {
+    console.error("[widgets] agent change failed", error);
+    return { ok: false, error: "We couldn't change that widget's agent. Please try again." };
+  }
+}
+
+/** Remembers the model one widget's edits run with; null restores its agent's. */
+export async function setWidgetEditModelAction(input: {
+  id: number;
+  modelKey: string | null;
+}): Promise<{ ok: true; widget: WidgetRecord } | { ok: false; error: string }> {
+  const id = widgetId(input.id);
+  if (!id) return { ok: false, error: "That widget could not be found." };
+
+  const user = await requireUser();
+  const profile = await ensureUserRecord(user);
+
+  try {
+    const key = typeof input.modelKey === "string" ? input.modelKey.trim() : "";
+    const saved = await setWidgetEditModelForUser(profile.id, id, key || null);
+    if (!saved) {
+      return { ok: false, error: "That model isn't available for this widget." };
+    }
+
+    const widget = await getWidgetForUser(profile.id, id);
+    if (!widget) return { ok: false, error: "That widget could not be found." };
+
+    revalidatePath("/dashboard");
+    return { ok: true, widget };
+  } catch (error) {
+    console.error("[widgets] edit model update failed", error);
+    return { ok: false, error: "We couldn't save that model. Please try again." };
   }
 }

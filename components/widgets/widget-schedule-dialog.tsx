@@ -157,7 +157,8 @@ export function WidgetScheduleDialog({
                     day: "numeric",
                     hour: "2-digit",
                     minute: "2-digit",
-                    timeZone: rule.timezone,
+                    // A legacy row can have no zone yet; Intl throws on null.
+                    ...(rule.timezone ? { timeZone: rule.timezone } : {}),
                   })}`
                 : enabled
                   ? "No future run — pick a later date."

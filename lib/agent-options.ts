@@ -55,8 +55,14 @@ export type AgentSummary = {
   avatar: string;
   color: string;
   provider: string;
+  /** The dashboard this agent belongs to; null on rows created before boards. */
+  dashboardId: number | null;
+  /** The team this agent works in; null = it works alone. */
+  teamId: number | null;
   /** How data-changing app actions are approved. */
   approvalMode: AgentApprovalMode;
+  /** One short line on what the agent is for; the prompt leads with it. */
+  objective: string | null;
   /** Tool ids the agent may call; null means all built-in tools. */
   enabledTools: string[] | null;
   /** MCP tool keys (`serverId:toolName`); null means every MCP tool. */
@@ -75,6 +81,7 @@ export type AgentDetail = AgentSummary & {
 };
 
 export const AGENT_NAME_MAX_LENGTH = 48;
+export const AGENT_OBJECTIVE_MAX_LENGTH = 300;
 export const AGENT_INSTRUCTIONS_MAX_LENGTH = 800;
 
 export type AgentColorOption = {

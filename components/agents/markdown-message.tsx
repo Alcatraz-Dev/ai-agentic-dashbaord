@@ -61,7 +61,7 @@ function MarkdownCodeBlock({ code, language }: { code: string; language: string 
   }, [copied]);
 
   return (
-    <div className="my-2 overflow-hidden rounded-xl border border-border/70 bg-muted/40">
+    <div className="my-2 min-w-0 max-w-full overflow-hidden rounded-xl border border-border/70 bg-muted/40">
       <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-muted/50 px-2.5 py-1">
         <span className="font-mono text-[0.6rem] font-medium tracking-[0.08em] text-muted-foreground uppercase">
           {language || "code"}
@@ -170,7 +170,7 @@ const components: Components = {
     return <MarkdownCodeBlock code={code} language={language} />;
   },
   table: ({ children }) => (
-    <div className="my-2 w-full max-w-full overflow-x-auto rounded-lg border border-border/70">
+    <div className="my-2 w-full min-w-0 max-w-full overflow-x-auto rounded-lg border border-border/70">
       <table className="w-full min-w-full border-collapse text-left text-[0.76rem]">{children}</table>
     </div>
   ),
@@ -181,7 +181,9 @@ const components: Components = {
     </th>
   ),
   td: ({ children }) => (
-    <td className="border-b border-border/40 px-2 py-1 align-top last:border-b-0">{children}</td>
+    <td className="border-b border-border/40 px-2 py-1 align-top break-words last:border-b-0">
+      {children}
+    </td>
   ),
   // eslint-disable-next-line @next/next/no-img-element -- markdown images are rare and not worth the optimizer
   img: ({ src, alt }) => (

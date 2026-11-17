@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { WidgetEditDialog } from "@/components/widgets/widget-edit-dialog";
 import { WidgetScheduleDialog } from "@/components/widgets/widget-schedule-dialog";
+import type { AgentModelCatalog } from "@/lib/agent-options";
 import { WIDGET_SIZES, type WidgetRecord, type WidgetSize } from "@/lib/widget-types";
 import { cn } from "@/lib/utils";
 
@@ -56,7 +57,9 @@ export function WidgetMenu({
   onDelete,
   onRefresh,
   onApplied,
+  catalog,
   editHref,
+  editAgentName,
   onEdit,
   onCustomize,
   onDuplicate,
@@ -73,7 +76,11 @@ export function WidgetMenu({
   onRefresh?: () => Promise<string | null>;
   /** Receives the widget after an AI edit is applied. */
   onApplied?: (widget: WidgetRecord) => void;
+  /** Model list for "Edit with AI"; without it the edit uses the agent's model. */
+  catalog?: AgentModelCatalog;
   editHref?: string;
+  /** The chat this item opens; resolved from the dashboard's own agents. */
+  editAgentName?: string;
   onEdit?: () => void;
   onCustomize?: () => void;
   onDuplicate?: () => void;
@@ -225,17 +232,17 @@ export function WidgetMenu({
               className="gap-2 text-[0.8rem]"
             >
               <PencilLine className="size-3.5" />
-              Edit with agent
+              {editAgentName ? `Edit with ${editAgentName}` : "Edit with agent"}
             </DropdownMenuItem>
-          ) : (
+          ) : onEdit ? (
             <DropdownMenuItem
               onClick={onEdit}
               className="gap-2 text-[0.8rem]"
             >
               <PencilLine className="size-3.5" />
-              Edit with agent
+              {editAgentName ? `Edit with ${editAgentName}` : "Edit with agent"}
             </DropdownMenuItem>
-          )}
+          ) : null}
           {onToggleLock ? (
             <DropdownMenuItem onClick={onToggleLock} className="gap-2 text-[0.8rem]">
               {widget.locked ? (
@@ -269,6 +276,7 @@ export function WidgetMenu({
 
       <WidgetEditDialog
         widget={widget}
+        catalog={catalog}
         open={editingWithAi}
         onOpenChange={setEditingWithAi}
         onApplied={(updated) => onApplied?.(updated)}

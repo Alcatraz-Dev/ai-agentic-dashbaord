@@ -9,11 +9,11 @@ import {
   BookOpen,
   Brain,
   CalendarClock,
-  Check,
   ChevronsUpDown,
   Folder,
   FolderOpen,
   GitBranch,
+  Inbox,
   LayoutGrid,
   LogOut,
   Package,
@@ -22,14 +22,15 @@ import {
   Sparkles,
   SquareKanban,
   Trash2,
+  UsersRound,
   Waypoints,
   type LucideIcon,
 } from "lucide-react";
 
 import { deleteAgentAction } from "@/app/actions/agents";
-import { switchDashboardAction } from "@/app/actions/dashboards";
 import { LogoMark } from "@/components/brand/logo";
 import { AgentAvatar } from "@/components/dashboard/agent-avatar";
+import { DashboardSwitcherDialog } from "@/components/dashboard/dashboard-switcher-dialog";
 import { useAgents } from "@/components/dashboard/agents-provider";
 import { CreateAgentButton } from "@/components/dashboard/create-agent-dialog";
 import {
@@ -159,10 +160,22 @@ const NAV_GROUPS: { id: string; label: string; items: NavEntry[] }[] = [
     label: "Work",
     items: [
       {
+        href: "/dashboard/inbox",
+        label: "Inbox",
+        icon: Inbox,
+        match: (pathname) => pathname.startsWith("/dashboard/inbox"),
+      },
+      {
         href: "/dashboard/tasks",
         label: "Tasks",
         icon: SquareKanban,
         match: (pathname) => pathname.startsWith("/dashboard/tasks"),
+      },
+      {
+        href: "/dashboard/teams",
+        label: "Teams",
+        icon: UsersRound,
+        match: (pathname) => pathname.startsWith("/dashboard/teams"),
       },
       {
         href: "/dashboard/jobs",
@@ -195,12 +208,18 @@ export function AppSidebar({
   user,
   dashboard,
   dashboards,
+  agentCounts = {},
+  widgetCounts = {},
   connectedApps = 0,
   plan = "free",
 }: {
   user: SidebarUser;
   dashboard: SidebarDashboard;
   dashboards: SidebarDashboard[];
+  /** Agents per dashboard, so the picker states whose team each board holds. */
+  agentCounts?: Record<number, number>;
+  /** Widgets per dashboard, shown beside the agent count. */
+  widgetCounts?: Record<number, number>;
   /** Apps connected through Composio, shown as a count next to Apps. */
   connectedApps?: number;
   /** Free workspaces see the Upgrade to Pro item in the footer. */
@@ -221,11 +240,9 @@ export function AppSidebar({
   const [pendingDelete, setPendingDelete] = useState<{ id: number; name: string } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [switching, setSwitching] = useState<number | null>(null);
-  const [switchError, setSwitchError] = useState<string | null>(null);
+  const [dashboardPickerOpen, setDashboardPickerOpen] = useState(false);
   const portrait = getDashboardPortrait(dashboard.icon);
   const template = getDashboardTemplate(dashboard.template);
-  const onSettingsPage = pathname.startsWith("/dashboard/dashboards");
 
   const activeNavHref =
     ALL_NAV_ITEMS.find((item) => item.match(pathname))?.href ?? null;
@@ -274,28 +291,6 @@ export function AppSidebar({
     }),
   }));
 
-  async function switchDashboard(next: SidebarDashboard) {
-    if (next.id === dashboard.id || switching !== null) return;
-
-    setSwitching(next.id);
-    setSwitchError(null);
-
-    try {
-      const result = await switchDashboardAction(next.id);
-      if (!result.ok) {
-        setSwitchError(result.error);
-        return;
-      }
-
-      if (pathname !== "/dashboard") router.push("/dashboard");
-      router.refresh();
-    } catch {
-      setSwitchError("We couldn't switch dashboards. Please try again.");
-    } finally {
-      setSwitching(null);
-    }
-  }
-
   async function confirmDelete() {
     if (!pendingDelete || isDeleting) return;
 
@@ -342,114 +337,41 @@ export function AppSidebar({
       <SidebarContent className="gap-0">
         <SidebarGroup className="pt-3">
           <SidebarGroupContent>
-            {/* Dashboard picker */}
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                className={cn(
-                  "flex h-8 w-full items-center gap-1.5 rounded-lg border border-sidebar-border bg-card px-1.5 text-left shadow-sm transition-[background-color,border-color,box-shadow] outline-none hover:border-brand-border hover:bg-brand-soft/30 focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-                  "group-data-[collapsible=icon]:size-6 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:p-0 group-data-[collapsible=icon]:shadow-none",
-                )}
-              >
-                <AgentAvatar
-                  avatar={portrait}
-                  color={dashboard.color}
-                  className="size-5 shrink-0 rounded-md shadow-sm ring-1 ring-black/5"
-                />
-                <span className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
-                  <span className="block truncate text-[0.7rem] leading-tight font-semibold">
-                    {dashboard.name}
-                  </span>
-                  <span className="block truncate text-[0.54rem] leading-tight text-muted-foreground">
-                    {template.name} template
-                  </span>
+            {/* Dashboard picker: opens the "Your dashboards" dialog. */}
+            <button
+              type="button"
+              onClick={() => setDashboardPickerOpen(true)}
+              aria-haspopup="dialog"
+              aria-expanded={dashboardPickerOpen}
+              className={cn(
+                "flex h-8 w-full items-center gap-1.5 rounded-lg border border-sidebar-border bg-card px-1.5 text-left shadow-sm transition-[background-color,border-color,box-shadow] outline-none hover:border-brand-border hover:bg-brand-soft/30 focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+                "group-data-[collapsible=icon]:size-6 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:p-0 group-data-[collapsible=icon]:shadow-none",
+              )}
+            >
+              <AgentAvatar
+                avatar={portrait}
+                color={dashboard.color}
+                className="size-5 shrink-0 rounded-md shadow-sm ring-1 ring-black/5"
+              />
+              <span className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
+                <span className="block truncate text-[0.7rem] leading-tight font-semibold">
+                  {dashboard.name}
                 </span>
-                <ChevronsUpDown className="size-3 shrink-0 text-muted-foreground group-data-[collapsible=icon]:hidden" />
-              </DropdownMenuTrigger>
+                <span className="block truncate text-[0.54rem] leading-tight text-muted-foreground">
+                  {template.name} template
+                </span>
+              </span>
+              <ChevronsUpDown className="size-3 shrink-0 text-muted-foreground group-data-[collapsible=icon]:hidden" />
+            </button>
 
-              <DropdownMenuContent align="start" sideOffset={6} className="w-64">
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel className="px-2 py-1 text-[0.6rem] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
-                    Your dashboards
-                  </DropdownMenuLabel>
-                  {dashboards.map((option) => {
-                    const active = option.id === dashboard.id;
-
-                    return (
-                      <DropdownMenuItem
-                        key={option.id}
-                        className={cn("gap-2.5 px-2 py-2", active && "bg-brand-soft/50")}
-                        onClick={() => void switchDashboard(option)}
-                      >
-                        <AgentAvatar
-                          avatar={getDashboardPortrait(option.icon)}
-                          color={option.color}
-                          className="size-7 shrink-0 rounded-lg"
-                        />
-                        <span className="min-w-0 flex-1 truncate text-[0.82rem] font-medium">
-                          {option.name}
-                        </span>
-                        {switching === option.id ? (
-                          <span className="size-3.5 shrink-0 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
-                        ) : active ? (
-                          <Check className="size-3.5 shrink-0 text-brand-ink" />
-                        ) : null}
-                      </DropdownMenuItem>
-                    );
-                  })}
-                  {switchError ? (
-                    <p role="alert" className="px-2 pb-1 text-[0.7rem] text-destructive">
-                      {switchError}
-                    </p>
-                  ) : null}
-                </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  nativeButton={false}
-                  render={<Link href="/dashboard/new" />}
-                  className="gap-2.5 px-2 py-2"
-                >
-                  <span className="grid size-7 shrink-0 place-items-center rounded-lg border border-border bg-muted/60 text-muted-foreground">
-                    <Plus className="size-3.5" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-[0.82rem] font-medium leading-tight">
-                      New dashboard
-                    </span>
-                    <span className="block truncate text-[0.65rem] text-muted-foreground">
-                      Pick a portrait and template
-                    </span>
-                  </span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  nativeButton={false}
-                  render={<Link href="/dashboard/dashboards" />}
-                  className={cn("gap-2.5 px-2 py-2", onSettingsPage && "bg-muted")}
-                >
-                  <span
-                    className={cn(
-                      "grid size-7 shrink-0 place-items-center rounded-lg border",
-                      onSettingsPage
-                        ? "border-brand-border bg-brand-soft text-brand-ink"
-                        : "border-border bg-muted/60 text-muted-foreground",
-                    )}
-                  >
-                    <SlidersHorizontal className="size-3.5" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-[0.82rem] font-medium leading-tight">
-                      Dashboard settings
-                    </span>
-                    <span className="block truncate text-[0.65rem] text-muted-foreground">
-                      {onSettingsPage ? "Editing this dashboard" : dashboard.name} · portrait,
-                      template
-                    </span>
-                  </span>
-                  {onSettingsPage ? (
-                    <Check className="size-3.5 shrink-0 text-brand-ink" />
-                  ) : null}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <DashboardSwitcherDialog
+              open={dashboardPickerOpen}
+              onOpenChange={setDashboardPickerOpen}
+              dashboards={dashboards}
+              activeId={dashboard.id}
+              agentCounts={agentCounts}
+              widgetCounts={widgetCounts}
+            />
 
             <div className="mx-1 my-2 h-px bg-sidebar-border/60 group-data-[collapsible=icon]:mx-0" />
 
@@ -539,7 +461,9 @@ export function AppSidebar({
                   return (
                     <SidebarMenuItem key={agent.id} className="group/agent">
                       <SidebarMenuButton
-                        tooltip={agent.name}
+                        tooltip={
+                          agent.objective ? `${agent.name} — ${agent.objective}` : agent.name
+                        }
                         isActive={active}
                         render={<Link href={`/dashboard/agents/${agent.id}`} />}
                         className={cn(

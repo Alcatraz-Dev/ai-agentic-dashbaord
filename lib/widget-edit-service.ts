@@ -119,6 +119,8 @@ export async function proposeWidgetEditForUser(
   profileId: number,
   widgetId: number,
   request: string,
+  /** Optional model key chosen in the dialog; defaults to the widget's agent. */
+  options?: { modelKey?: string | null },
 ): Promise<WidgetEditRequestResult> {
   const cleanRequest = request.trim().slice(0, MAX_REQUEST_CHARS);
   if (!cleanRequest) return { ok: false, error: "Describe the change you want first." };
@@ -129,7 +131,24 @@ export async function proposeWidgetEditForUser(
   const target = await getWidgetRefreshTargetForUser(profileId, widgetId);
   if (!target) return { ok: false, error: "That widget could not be found." };
 
-  const connection = await resolveAgentConnection(target.provider, target.ownerId);
+  // Each dashboard has its own agents, and each agent has a model. The dialog can
+  // override that model for one edit; anything else resolves through the agent
+  // that owns this card, so an edit can never borrow another board's setup.
+  const modelOverride =
+    typeof options?.modelKey === "string" && options.modelKey.trim()
+      ? options.modelKey.trim()
+      : // No choice this time: reuse the model this widget last used, if any.
+        (widget.editModel ?? "");
+  const usesOverride = modelOverride.startsWith("ai:") || modelOverride.startsWith("custom:");
+
+  const connection = await resolveAgentConnection(
+    usesOverride ? modelOverride : target.provider,
+    target.ownerId,
+  );
+
+  if (usesOverride && connection.isFallback && modelOverride.startsWith("custom:")) {
+    return { ok: false, error: "That model isn't connected any more. Pick another one." };
+  }
   if (!connection.apiKey) {
     return { ok: false, error: "This widget's agent has no model connection." };
   }

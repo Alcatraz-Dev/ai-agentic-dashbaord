@@ -25,7 +25,7 @@ import { cn } from "@/lib/utils";
 /**
  * One widget, rendered from plain data.
  *
- * A widget is a form (one of twenty-six) plus a style (one of seven). Both are
+ * A widget is a form (one of twenty-seven) plus a style (one of seventeen). Both are
  * stored, and every size is derived from the same payload in one render — no
  * model call, no pre-generated layout. The form can only be one the data can
  * honestly support. An owner's appearance choices are applied as inline tokens
@@ -36,22 +36,13 @@ export type WidgetCardModel = {
   title: string;
   icon: WidgetIconKey;
   illustration?: WidgetIllustrationKey;
-  design: WidgetRecordDesign;
+  design: WidgetDesignKey;
   form: WidgetForm;
   data: WidgetPayload;
   updatedAt?: string | null;
   /** Owner customization; null/undefined keeps the design's own look. */
   appearance?: WidgetAppearance | null;
 };
-
-type WidgetRecordDesign =
-  | "classic"
-  | "illustrated"
-  | "pop"
-  | "glass"
-  | "neon"
-  | "editorial"
-  | "clean";
 
 const HEIGHTS: Record<WidgetSize, string> = {
   small: "h-[176px]",
@@ -143,14 +134,46 @@ export function WidgetCard({
           design.glow,
         )}
       />
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0 opacity-[0.05]"
-        style={{
-          backgroundImage: "radial-gradient(circle at 1px 1px, currentColor 1px, transparent 0)",
-          backgroundSize: "16px 16px",
-        }}
-      />
+      {/* The style's own decoration, so two styles differ in texture, not only
+          in colour: dots, a drafting grid, corner rays or a soft mesh. */}
+      {design.decoration && design.decoration !== "none" ? (
+        <div
+          aria-hidden="true"
+          className={cn(
+            "pointer-events-none absolute inset-0",
+            design.decoration === "mesh"
+              ? "opacity-[0.12]"
+              : design.decoration === "grid"
+                ? "opacity-[0.08]"
+                : design.decoration === "rays"
+                  ? "opacity-[0.07]"
+                  : "opacity-[0.05]",
+          )}
+          style={
+            design.decoration === "grid"
+              ? {
+                  backgroundImage:
+                    "linear-gradient(currentColor 1px, transparent 1px), linear-gradient(90deg, currentColor 1px, transparent 1px)",
+                  backgroundSize: "18px 18px",
+                }
+              : design.decoration === "rays"
+                ? {
+                    backgroundImage:
+                      "conic-gradient(from 210deg at 85% -10%, currentColor 0deg, transparent 90deg, currentColor 180deg, transparent 250deg)",
+                  }
+                : design.decoration === "mesh"
+                  ? {
+                      backgroundImage:
+                        "radial-gradient(circle at 15% 15%, currentColor 0%, transparent 45%), radial-gradient(circle at 85% 85%, currentColor 0%, transparent 45%)",
+                    }
+                  : {
+                      backgroundImage:
+                        "radial-gradient(circle at 1px 1px, currentColor 1px, transparent 0)",
+                      backgroundSize: "16px 16px",
+                    }
+          }
+        />
+      ) : null}
       {overlay > 0 ? (
         <div
           aria-hidden="true"

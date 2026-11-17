@@ -12,6 +12,7 @@ import {
 } from "drizzle-orm/pg-core";
 
 import type { AgentResultCard } from "@/lib/apps/results";
+import type { AgentHandoffResult } from "@/lib/agent-team";
 import type { TaskRoleAttachment, TaskToolSelection } from "@/lib/task-types";
 import type { ScheduleActionPolicy, ScheduleSentAction } from "@/lib/schedule-action";
 import type { DashboardAppearance, WidgetAppearance } from "@/lib/widget-appearance";
@@ -112,6 +113,69 @@ export const dashboards = pgTable(
   (table) => [index("dashboards_owner_idx").on(table.ownerId)],
 );
 
+/**
+ * A code project the owner attached to the workspace: a cloned repository or a
+ * folder on this machine. The developer agent reads it through the read-only
+ * project tools; nothing is ever written into it.
+ */
+export const projects = pgTable(
+  "projects",
+  {
+    id: serial("id").primaryKey(),
+    ownerId: integer("owner_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** Shown in the picker, e.g. "acme/api" or the folder's own name. */
+    name: text("name").notNull(),
+    /** "repo" (cloned under .projects/<owner>) or "folder" (an existing path). */
+    kind: text("kind").notNull().default("folder"),
+    /** Absolute path on this machine. */
+    location: text("location").notNull(),
+    /** The https URL a repo was cloned from, null for a folder. */
+    url: text("url"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [index("projects_owner_idx").on(table.ownerId)],
+);
+
+/**
+ * A team: a named group of this workspace's agents, one of which leads.
+ *
+ * Membership lives on `agents.team_id` (one team per agent), so moving someone
+ * between teams is one column write and deleting a team only detaches its
+ * members. `lead_agent_id` is deliberately not a foreign key: agents reference
+ * teams, and a pair of cross-table FKs would make the two tables impossible to
+ * create in either order. `lib/teams.ts` validates it on every write.
+ */
+export const teams = pgTable(
+  "teams",
+  {
+    id: serial("id").primaryKey(),
+    ownerId: integer("owner_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** The board this team works on; only that board's agents may join. */
+    dashboardId: integer("dashboard_id").references(() => dashboards.id, {
+      onDelete: "cascade",
+    }),
+    name: text("name").notNull(),
+    /** A clay portrait (`shape:face[:motion]`), like an agent's. */
+    avatar: text("avatar").notNull().default("circle:attentive"),
+    /** Key into the twelve clay colours in `lib/agent-options.ts`. */
+    color: text("color").notNull().default("blue"),
+    /** One line on what the team is for; the lead's prompt states it. */
+    objective: text("objective"),
+    /** The agent a team chat runs with; null until the owner picks one. */
+    leadAgentId: integer("lead_agent_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("teams_owner_idx").on(table.ownerId),
+    index("teams_dashboard_idx").on(table.dashboardId),
+  ],
+);
+
 /** An AI agent created from the sidebar / empty dashboard. */
 export const agents = pgTable(
   "agents",
@@ -120,6 +184,14 @@ export const agents = pgTable(
     ownerId: integer("owner_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    /**
+     * The dashboard this agent belongs to. The sidebar lists one dashboard's
+     * team at a time; null only survives for rows created before dashboards
+     * owned agents (the push backfilled them onto the owner's oldest board).
+     */
+    dashboardId: integer("dashboard_id").references(() => dashboards.id, { onDelete: "cascade" }),
+    /** The team this agent works in; null = it works alone. */
+    teamId: integer("team_id").references(() => teams.id, { onDelete: "set null" }),
     name: text("name").notNull(),
     /** Key into the avatar catalog in `lib/agent-options.ts`. */
     avatar: text("avatar").notNull().default("buddy"),
@@ -127,6 +199,8 @@ export const agents = pgTable(
     color: text("color").notNull().default("blue"),
     /** "alcatraz" | "claude" | "chatgpt" | "codex" | "cursor" | "kimi" */
     provider: text("provider").notNull().default("alcatraz"),
+    /** One short line on what this agent is for; kept apart from instructions. */
+    objective: text("objective"),
     instructions: text("instructions"),
     /** "ask" | "auto" | "full" — how app actions that change data are approved. */
     approvalMode: text("approval_mode").notNull().default("ask"),
@@ -145,7 +219,11 @@ export const agents = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
-  (table) => [index("agents_owner_idx").on(table.ownerId)],
+  (table) => [
+    index("agents_owner_idx").on(table.ownerId),
+    index("agents_dashboard_idx").on(table.dashboardId),
+    index("agents_team_idx").on(table.teamId),
+  ],
 );
 
 /** Saved model configurations the user has connected (BYO AI models). */
@@ -454,6 +532,8 @@ export const widgets = pgTable(
     /** Legacy five-field cron mirrored from the rule, e.g. `0 8,18 * * *`. */
     refreshCron: text("refresh_cron").notNull().default("0 8,18 * * *"),
     /** IANA zone the rule means; null falls back to UTC at the scheduler. */
+    /** Model key the owner last chose for "Edit with AI" (null = agent's model). */
+    editModel: text("edit_model"),
     refreshTimezone: text("refresh_timezone"),
     /** Pause/resume the widget's automatic updates without deleting it. */
     refreshEnabled: boolean("refresh_enabled").notNull().default(true),
@@ -570,6 +650,8 @@ export const agentMessages = pgTable(
     sources: jsonb("sources").$type<{ title: string; url: string }[]>(),
     /** Result cards produced by app actions, rendered again after a reload. */
     cards: jsonb("cards").$type<AgentResultCard[]>(),
+    /** Teammate answers this turn used, so a reload keeps the hand-off cards. */
+    handoffs: jsonb("handoffs").$type<AgentHandoffResult[]>(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [index("agent_messages_agent_idx").on(table.agentId, table.id)],
@@ -789,6 +871,8 @@ export type Dashboard = typeof dashboards.$inferSelect;
 export type NewDashboard = typeof dashboards.$inferInsert;
 export type Agent = typeof agents.$inferSelect;
 export type NewAgent = typeof agents.$inferInsert;
+export type Team = typeof teams.$inferSelect;
+export type NewTeam = typeof teams.$inferInsert;
 export type AiUsage = typeof aiUsage.$inferSelect;
 export type NewAiUsage = typeof aiUsage.$inferInsert;
 export type AgentScheduleRun = typeof agentScheduleRuns.$inferSelect;

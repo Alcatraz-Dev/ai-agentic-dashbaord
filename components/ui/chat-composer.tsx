@@ -103,6 +103,11 @@ export type ChatComposerProps = {
   /** Opens the folder picker (the plus menu and the tray row call it). */
   onAttachFolder?: () => void;
   /**
+   * Opens the workspace project dialog: a folder on this machine or a clone of
+   * a GitHub repository, whose files then live in the Desk panel.
+   */
+  onAttachProject?: () => void;
+  /**
    * The Add option armed for the next send, shown as a chip next to Plan mode.
    * A record option (task / skill / plugin) turns the send into its form; a
    * diagram turns it into a drawing request.
@@ -722,6 +727,7 @@ export function ChatComposer({
   onRemoveAttachment,
   onAttach,
   onAttachFolder,
+  onAttachProject,
   addAction = null,
   onAddActionChange,
   tools,
@@ -1016,6 +1022,14 @@ export function ChatComposer({
           },
         },
         { id: "apps", run: () => (apps.length > 0 ? openMenu("apps", 0) : closeMenu(false)) },
+        {
+          id: "project",
+          disabled: !onAttachProject,
+          run: () => {
+            closeMenu(false);
+            onAttachProject?.();
+          },
+        },
       ];
     }
 
@@ -1620,6 +1634,28 @@ export function ChatComposer({
                   {connected.length > 0
                     ? `${connected.length} apps connected to this workspace`
                     : "Connect the apps this agent may use"}
+                </span>
+              </span>
+            </button>
+
+            <button
+              type="button"
+              role="menuitem"
+              id={menuId("plus-8")}
+              className="ui-cc__option"
+              data-active={active === 8 ? "true" : "false"}
+              onMouseEnter={() => setActive(8)}
+              disabled={!onAttachProject}
+              onClick={() => {
+                closeMenu(false);
+                onAttachProject?.();
+              }}
+            >
+              <FolderOpen size={17} className="ui-cc__option-icon" aria-hidden="true" />
+              <span className="ui-cc__option-body">
+                <span className="ui-cc__option-title">Open a project folder</span>
+                <span className="ui-cc__option-note">
+                  Attach a folder on this machine or clone a GitHub repository
                 </span>
               </span>
             </button>

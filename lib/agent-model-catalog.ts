@@ -9,6 +9,7 @@ import {
 } from "@/lib/agent-runtime/models";
 import {
   CURATED_MODELS,
+  isChatModelId,
   modelInfoForId,
   providerRank,
   type AgentModelInfo,
@@ -116,7 +117,13 @@ async function fetchEndpointModelIds(): Promise<AgentModelInfo[] | null> {
 
 function buildModelList(discovered: AgentModelInfo[] | null): AgentModelInfo[] {
   const byId = new Map<string, AgentModelInfo>();
-  for (const model of discovered ?? CURATED_MODELS) byId.set(model.id, model);
+  // Chat models only: the gateway also lists embeddings, image/audio models and
+  // `:batch` variants, and picking one of those fails the turn it was chosen for.
+  for (const model of (discovered ?? CURATED_MODELS).filter((entry) =>
+    isChatModelId(entry.id),
+  )) {
+    byId.set(model.id, model);
+  }
 
   // AI_MODEL / AI_MODELS always contribute, even if the endpoint omitted them.
   const defaultId = defaultBuiltinModel();

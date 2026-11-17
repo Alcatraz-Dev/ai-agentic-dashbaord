@@ -4,6 +4,7 @@ import { and, desc, eq, lt } from "drizzle-orm";
 
 import { agentMessages, db } from "@/db";
 import type { AgentResultCard } from "@/lib/apps/results";
+import type { AgentHandoffResult } from "@/lib/agent-team";
 import type { ChatSource, ChatToolStep } from "@/lib/agent-demo";
 
 /**
@@ -29,6 +30,8 @@ export type StoredAgentMessage = {
   steps?: ChatToolStep[];
   sources?: ChatSource[];
   cards?: AgentResultCard[];
+  /** Teammate answers this reply used, rendered again after a reload. */
+  handoffs?: AgentHandoffResult[];
 };
 
 /** Turns per page: enough to fill the transcript without a long first paint. */
@@ -50,9 +53,10 @@ function toStoredMessage(row: {
   id: number;
   role: string;
   content: string;
-  steps: { name: string; label: string }[] | null;
+  steps: { name: string; label: string; detail?: string }[] | null;
   sources: ChatSource[] | null;
   cards: AgentResultCard[] | null;
+  handoffs: AgentHandoffResult[] | null;
   createdAt: Date;
 }): StoredAgentMessage {
   return {
@@ -63,6 +67,7 @@ function toStoredMessage(row: {
     steps: row.steps?.map((step) => ({ ...step, status: "done" as const })),
     sources: row.sources ?? undefined,
     cards: row.cards ?? undefined,
+    handoffs: row.handoffs ?? undefined,
   };
 }
 
@@ -97,6 +102,7 @@ export async function listAgentMessagePage(
       steps: agentMessages.steps,
       sources: agentMessages.sources,
       cards: agentMessages.cards,
+      handoffs: agentMessages.handoffs,
       createdAt: agentMessages.createdAt,
     })
     .from(agentMessages)
@@ -136,9 +142,10 @@ export async function appendAgentMessage(input: {
   agentId: number;
   role: "user" | "assistant";
   content: string;
-  steps?: ChatToolStep[] | null;
+  steps?: { name: string; label: string; detail?: string }[] | null;
   sources?: ChatSource[] | null;
   cards?: AgentResultCard[] | null;
+  handoffs?: AgentHandoffResult[] | null;
 }): Promise<void> {
   await db.insert(agentMessages).values({
     agentId: input.agentId,
@@ -147,5 +154,6 @@ export async function appendAgentMessage(input: {
     steps: input.steps?.map(({ name, label }) => ({ name, label })) ?? null,
     sources: input.sources ?? null,
     cards: input.cards ?? null,
+    handoffs: input.handoffs ?? null,
   });
 }

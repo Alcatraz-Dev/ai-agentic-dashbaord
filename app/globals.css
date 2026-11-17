@@ -2091,7 +2091,7 @@
  * ------------------------------------------------------------------ */
 
 .sidebar-nav-tree.ui-tv {
-  --ui-tv-h: 26px;
+  --ui-tv-h: 28px;
   --ui-tv-pad: 2px;
   --ui-tv-indent: 11px;
   --ui-tv-chev: 12px;
@@ -2105,8 +2105,8 @@
 }
 
 .sidebar-nav-tree .ui-tv__icon {
-  width: 14px;
-  height: 14px;
+  width: 20px;
+  height: 20px;
   margin-inline-end: 6px;
 }
 

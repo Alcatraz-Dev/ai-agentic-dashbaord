@@ -128,6 +128,16 @@ const designSchema = z.enum([
   "neon",
   "editorial",
   "clean",
+  "minimalist",
+  "retro",
+  "tech",
+  "luxury",
+  "organic",
+  "paper",
+  "candy",
+  "noir",
+  "blueprint",
+  "terminal",
 ]);
 
 const formSchema = z.enum([
@@ -196,7 +206,7 @@ const proposeParameters = z.object({
     .min(2)
     .max(4)
     .describe(
-      "Two to four looks. Each pairs a different form (what the data supports) with a style (classic, illustrated, pop, glass, neon, editorial, clean). Every option must use a different style, and the forms must come from different layout families when the data allows: figure (number, tiles, scene), chart (trend, bars, heat, kpi, forecast), share (gauge, waffle, split, donut, rings, dials, meters), list (ranking, feed, rows, checklist, inbox, activity, agenda), rank (podium), grid (news, briefing) or timeline. Never repeat a form + style already on the dashboard.",
+      "Two to four looks. Each pairs a different form (what the data supports) with a style (classic, illustrated, pop, glass, neon, editorial, clean, minimalist, retro, tech, luxury, organic). Every option must use a different style, and the forms must come from different layout families when the data allows: figure (number, tiles, scene), chart (trend, bars, heat, kpi, forecast), share (gauge, waffle, split, donut, rings, dials, meters), list (ranking, feed, rows, checklist, inbox, activity, agenda), rank (podium), grid (news, briefing) or timeline. Never repeat a form + style already on the dashboard.",
     ),
 });
 

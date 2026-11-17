@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Loader2, Sparkles } from "lucide-react";
 
+import { ModelPicker } from "@/components/agents/model-picker";
 import { requestWidgetEditAction } from "@/app/actions/widgets";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { TextArea } from "@/components/ui/text-area";
 import { WidgetEditCard } from "@/components/widgets/widget-edit-card";
+import type { AgentModelCatalog } from "@/lib/agent-options";
 import type { WidgetEditProposal, WidgetRecord } from "@/lib/widget-types";
 
 const SUGGESTIONS = [
@@ -29,22 +31,28 @@ const SUGGESTIONS = [
  */
 export function WidgetEditDialog({
   widget,
+  catalog,
   open,
   onOpenChange,
   onApplied,
 }: {
   widget: WidgetRecord;
+  /** Models offered for this edit; omitted where no picker is available. */
+  catalog?: AgentModelCatalog;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onApplied: (widget: WidgetRecord) => void;
 }) {
+  const defaultModel = widget.editModel ?? widget.agentProvider ?? catalog?.defaultKey ?? "";
   const [request, setRequest] = useState("");
+  const [modelKey, setModelKey] = useState(defaultModel);
   const [asking, setAsking] = useState(false);
   const [proposal, setProposal] = useState<WidgetEditProposal | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   function reset() {
     setRequest("");
+    setModelKey(defaultModel);
     setAsking(false);
     setProposal(null);
     setError(null);
@@ -56,7 +64,11 @@ export function WidgetEditDialog({
     setError(null);
 
     try {
-      const result = await requestWidgetEditAction({ id: widget.id, request });
+      const result = await requestWidgetEditAction({
+        id: widget.id,
+        request,
+        modelKey: modelKey || undefined,
+      });
       if (!result.ok) {
         setError(result.error);
         return;
@@ -113,6 +125,28 @@ export function WidgetEditDialog({
           </div>
         ) : (
           <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-border/70 bg-muted/25 px-3 py-2">
+              <div className="min-w-0">
+                <p className="text-[0.7rem] font-medium">Run with</p>
+                <p className="truncate text-[0.6rem] text-muted-foreground">
+                  {catalog
+                    ? `${widget.agentName}'s model · this dashboard`
+                    : `${widget.agentName}'s model · set it in the agent panel`}
+                </p>
+              </div>
+              {catalog ? (
+                <div className="min-w-0 flex-[1_1_11rem] sm:max-w-56">
+                  <ModelPicker
+                    catalog={catalog}
+                    value={modelKey}
+                    onSelect={setModelKey}
+                    align="end"
+                    matchTriggerWidth
+                    className="justify-between"
+                  />
+                </div>
+              ) : null}
+            </div>
             <TextArea
               value={request}
               onChange={(event) => setRequest(event.target.value)}

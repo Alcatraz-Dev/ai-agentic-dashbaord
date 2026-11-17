@@ -20,6 +20,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   SquareKanban,
+  UsersRound,
   Waypoints,
 } from "lucide-react";
 
@@ -81,7 +82,9 @@ const SECTIONS = [
   { href: "/dashboard/plugins", label: "Plugins", icon: Package },
   { href: "/dashboard/skills", label: "Skills", icon: BookOpen },
   { href: "/dashboard/diagrams", label: "Diagrams", icon: GitBranch },
+  { href: "/dashboard/inbox", label: "Inbox", icon: Bell },
   { href: "/dashboard/tasks", label: "Tasks", icon: SquareKanban },
+  { href: "/dashboard/teams", label: "Teams", icon: UsersRound },
   { href: "/dashboard/jobs", label: "Scheduled jobs", icon: CalendarClock },
   { href: "/dashboard/automations", label: "Scheduled jobs", icon: CalendarClock },
   { href: "/dashboard/settings", label: "Settings", icon: SlidersHorizontal },
@@ -454,6 +457,8 @@ export function DashboardShell({
   user,
   dashboard,
   dashboards,
+  agentCounts,
+  widgetCounts,
   agents,
   models,
   alerts,
@@ -465,6 +470,10 @@ export function DashboardShell({
   user: ShellUser;
   dashboard: ShellDashboard;
   dashboards: ShellDashboard[];
+  /** Agents per dashboard, for the "Your dashboards" dialog. */
+  agentCounts?: Record<number, number>;
+  /** Widgets per dashboard, shown beside the agent count. */
+  widgetCounts?: Record<number, number>;
   agents: AgentSummary[];
   models: AgentModelCatalog;
   alerts: { count: number; runs: AgentScheduleRunWithContext[] };
@@ -484,6 +493,8 @@ export function DashboardShell({
           user={user}
           dashboard={dashboard}
           dashboards={dashboards}
+          agentCounts={agentCounts}
+          widgetCounts={widgetCounts}
           connectedApps={connectedApps}
           plan={plan}
         />
@@ -491,7 +502,7 @@ export function DashboardShell({
         <SidebarInset>
           <ShellHeader user={user} dashboard={dashboard} alerts={alerts} plan={plan} />
 
-          <div className="relative flex flex-1 flex-col bg-background p-3 sm:p-6 lg:p-8">
+          <div className="relative flex min-w-0 flex-1 flex-col overflow-x-hidden bg-background p-3 sm:p-6 lg:p-8">
             <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
               <div className="premium-grid absolute inset-0 opacity-35 [mask-image:radial-gradient(70%_50%_at_50%_0%,black,transparent)]" />
               <div className="absolute inset-x-0 top-0 h-40 bg-[radial-gradient(60%_80%_at_50%_0%,color-mix(in_oklab,var(--brand-soft)_55%,transparent),transparent)]" />

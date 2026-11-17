@@ -2,29 +2,29 @@ import { z } from "zod";
 
 import { streamAgentReply } from "@/lib/agent-runtime";
 import {
+  AGENT_CHAT_MAX_MESSAGE_LENGTH,
+  AGENT_CHAT_MAX_MESSAGES,
   AGENT_STREAM_CONTENT_TYPE,
   type AgentStreamEvent,
   type AgentToolSource,
 } from "@/lib/agent-runtime/protocol";
 import { appendAgentMessage } from "@/lib/agent-messages";
 import type { AgentResultCard } from "@/lib/apps/results";
+import type { AgentHandoffResult } from "@/lib/agent-team";
 import { getAgentForUser } from "@/lib/agents";
 import { getCurrentUser } from "@/lib/session";
 import { ensureUserRecord } from "@/lib/users";
-
-const MAX_MESSAGE_LENGTH = 4000;
-const MAX_MESSAGES = 30;
 
 const bodySchema = z.object({
   messages: z
     .array(
       z.object({
         role: z.enum(["user", "assistant"]),
-        content: z.string().trim().min(1).max(MAX_MESSAGE_LENGTH),
+        content: z.string().trim().min(1).max(AGENT_CHAT_MAX_MESSAGE_LENGTH),
       }),
     )
     .min(1)
-    .max(MAX_MESSAGES),
+    .max(AGENT_CHAT_MAX_MESSAGES),
 });
 
 const SAFE_FALLBACK = "The agent couldn't finish that reply. Please try again.";
@@ -55,6 +55,20 @@ export async function POST(
 
   const parsed = bodySchema.safeParse(payload);
   if (!parsed.success) {
+    // Name the real limit when a single message is too long. The old generic
+    // reply made one oversized turn look like a broken conversation.
+    const tooLong = parsed.error.issues.some(
+      (issue) =>
+        issue.code === "too_big" && issue.path[issue.path.length - 1] === "content",
+    );
+    if (tooLong) {
+      return Response.json(
+        {
+          error: `One message is longer than ${AGENT_CHAT_MAX_MESSAGE_LENGTH.toLocaleString()} characters. Shorten it or remove an attachment, then send again.`,
+        },
+        { status: 400 },
+      );
+    }
     return Response.json({ error: "That message couldn't be read. Try again." }, { status: 400 });
   }
 
@@ -79,9 +93,10 @@ export async function POST(
 
       // Collected while streaming so the finished turn can be stored.
       let reply = "";
-      const steps: { name: string; label: string }[] = [];
+      const steps: { name: string; label: string; detail?: string }[] = [];
       let sources: AgentToolSource[] = [];
       const cards: AgentResultCard[] = [];
+      const handoffs: AgentHandoffResult[] = [];
 
       await appendAgentMessage({
         agentId: agent.id,
@@ -99,9 +114,14 @@ export async function POST(
 
           if (event.type === "text") reply += event.delta;
           else if (event.type === "tool_started") {
-            steps.push({ name: event.name, label: event.label });
+            steps.push(
+              event.detail
+                ? { name: event.name, label: event.label, detail: event.detail }
+                : { name: event.name, label: event.label },
+            );
           } else if (event.type === "sources") sources = event.sources;
           else if (event.type === "app_result") cards.push(event.card);
+          else if (event.type === "handoff") handoffs.push(event.handoff);
 
           send(event);
         }
@@ -114,6 +134,7 @@ export async function POST(
             steps: steps.length > 0 ? steps.map((step) => ({ ...step, status: "done" as const })) : null,
             sources: sources.length > 0 ? sources : null,
             cards: cards.length > 0 ? cards : null,
+            handoffs: handoffs.length > 0 ? handoffs : null,
           }).catch((error) => console.error("[agents] could not save the reply", error));
         }
       } catch (error) {

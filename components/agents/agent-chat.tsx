@@ -37,10 +37,13 @@ import { deleteWidgetAction, refreshWidgetNowAction } from "@/app/actions/widget
 import { AgentTrail, type TrailStep } from "@/components/aui/pro/agent-trail";
 import { AppResultCard } from "@/components/agents/app-result-card";
 import { ApprovalCard, type ApprovalRequest } from "@/components/agents/approval-card";
+import { AttachProjectDialog } from "@/components/agents/attach-project-dialog";
 import { ConnectionCard, type ConnectionRequest } from "@/components/agents/connection-card";
 import { MarkdownMessage } from "@/components/agents/markdown-message";
 import { LiveBrowser } from "@/components/agents/live-browser";
 import { ModelPicker } from "@/components/agents/model-picker";
+import { getIntegration } from "@/lib/apps/catalog";
+import { templateAllowsAppCategory } from "@/lib/template-workspaces";
 import { AgentAvatar } from "@/components/dashboard/agent-avatar";
 import { AgentWidgetStrip } from "@/components/widgets/agent-widget-strip";
 import { TemplateSuggestionStrip } from "@/components/agents/template-suggestion-strip";
@@ -48,6 +51,7 @@ import { WidgetOfferCard } from "@/components/widgets/widget-offer-card";
 import { ScheduleProposalCard } from "@/components/agents/schedule-proposal-card";
 import { TaskProposalCard } from "@/components/tasks/task-proposal-card";
 import { LayoutProposalCard } from "@/components/agents/layout-proposal-card";
+import { useComposerPrefill } from "@/components/agents/composer-intent";
 import {
   ComposerAddDialogs,
   type ComposerAddMode,
@@ -55,7 +59,9 @@ import {
 } from "@/components/agents/composer-add-dialogs";
 import { extractArchify } from "@/lib/diagram-source";
 import type { TaskProposal } from "@/lib/task-types";
+import type { ProjectPatchProposal } from "@/lib/project-patch";
 import { browserTimeZone, type AgentScheduleProposal } from "@/lib/agent-schedule-options";
+import { ProjectPatchCard } from "@/components/projects/project-patch-card";
 import { WidgetEditCard } from "@/components/widgets/widget-edit-card";
 import {
   WidgetOptionsCard,
@@ -131,8 +137,25 @@ import { cn } from "@/lib/utils";
 /** How many stored messages the page and the chat route exchange per step. */
 const MESSAGE_PAGE_SIZE = 10;
 
-/** Matches the chat route's body limit; older turns simply stay in storage. */
-const MAX_CONTEXT_MESSAGES = 30;
+import {
+  AGENT_CHAT_HISTORY_MESSAGE_LENGTH,
+  AGENT_CHAT_MAX_MESSAGE_LENGTH,
+  AGENT_CHAT_MAX_MESSAGES,
+} from "@/lib/agent-runtime/protocol";
+
+/**
+ * One replayed turn, clipped to the route's per-message limit.
+ *
+ * History is context, not the request: a long assistant reply used to make the
+ * whole body invalid, so every later message failed with "That message couldn't
+ * be read". Only the newest turn is sent whole (and it is checked first).
+ */
+function clipForContext(text: string): string {
+  if (text.length <= AGENT_CHAT_HISTORY_MESSAGE_LENGTH) return text;
+  return `${text
+    .slice(0, AGENT_CHAT_HISTORY_MESSAGE_LENGTH - 32)
+    .trimEnd()}\n… (earlier message clipped)`;
+}
 
 /** Chips the composer shows for picked files; a folder counts as one. */
 const MAX_ATTACHMENTS = 6;
@@ -146,6 +169,7 @@ type StoredMessagePayload = {
   steps?: ChatToolStep[];
   sources?: ChatSource[];
   cards?: AgentResultCard[];
+  handoffs?: ChatMessage["handoffs"];
 };
 
 function toChatMessage(message: StoredMessagePayload): ChatMessage {
@@ -157,6 +181,7 @@ function toChatMessage(message: StoredMessagePayload): ChatMessage {
     steps: message.steps,
     sources: message.sources,
     cards: message.cards,
+    handoffs: message.handoffs,
   };
 }
 
@@ -291,7 +316,7 @@ function ToolSteps({ steps }: { steps: ChatToolStep[] }) {
 
     return {
       id: `${step.name}-${index}`,
-      title: step.label,
+      title: step.detail ? `${step.label} · ${step.detail}` : step.label,
       state: step.status === "running" ? "running" : "done",
       duration: step.duration,
       startedAt: step.startedAt,
@@ -312,6 +337,7 @@ function Message({
   onAddTask,
   onAddSkill,
   onSaveDiagram,
+  onDismissHandoff,
 }: {
   message: ChatMessage;
   agent: AgentDetail;
@@ -321,6 +347,8 @@ function Message({
   onAddSkill?: (text: string) => void;
   /** Saves the reply's Archify block as a workspace diagram. */
   onSaveDiagram?: (source: string) => void;
+  /** Hides a stored teammate card for this session, without deleting it. */
+  onDismissHandoff?: (messageId: string, handoffId: string) => void;
 }) {
   const isUser = message.role === "user";
   const hasText = message.content.trim().length > 0;
@@ -358,6 +386,18 @@ function Message({
             {message.cards.map((card, index) => (
               <AppResultCard key={`${message.id}-card-${index}`} card={card} />
             ))}
+          </div>
+        ) : null}
+        {!isUser && message.handoffs && message.handoffs.length > 0 ? (
+          <div className="mt-1.5 space-y-1.5">
+            <HandoffList
+              handoffs={message.handoffs}
+              onDismiss={
+                onDismissHandoff
+                  ? (handoffId) => onDismissHandoff(message.id, handoffId)
+                  : undefined
+              }
+            />
           </div>
         ) : null}
         {!isUser ? (
@@ -403,6 +443,57 @@ function Message({
         </p>
       </div>
     </div>
+  );
+}
+
+/** Teammate answers, shown under the reply that used them. */
+type HandoffResult = Extract<AgentStreamEvent, { type: "handoff" }>["handoff"];
+
+function HandoffList({
+  handoffs,
+  onDismiss,
+}: {
+  handoffs: HandoffResult[];
+  onDismiss?: (handoffId: string) => void;
+}) {
+  return (
+    <>
+      {handoffs.map((handoff) => (
+        <div
+          key={handoff.id}
+          className="rounded-xl border border-brand-border/70 bg-brand-soft/40 px-2.5 py-2"
+        >
+          <p className="flex items-center gap-1 text-[0.58rem] font-semibold uppercase tracking-[0.1em] text-brand-ink">
+            <AgentAvatar
+              avatar={handoff.to.avatar}
+              color={handoff.to.color}
+              className="size-4 shrink-0"
+            />
+            <span className="truncate">{handoff.to.name}</span>{" "}
+            {handoff.ok ? "answered" : "couldn't finish"}
+            <span className="text-[0.55rem] font-normal normal-case tracking-normal text-muted-foreground tabular-nums">
+              {Math.max(1, Math.round(handoff.durationMs / 1000))}s
+            </span>
+            {onDismiss ? (
+              <button
+                type="button"
+                onClick={() => onDismiss(handoff.id)}
+                className="ml-auto rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+                aria-label="Hide this teammate answer"
+              >
+                <X className="size-3" />
+              </button>
+            ) : null}
+          </p>
+          <p className="mt-0.5 line-clamp-2 text-[0.6rem] text-muted-foreground">
+            Asked: {handoff.task}
+          </p>
+          <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap text-[0.72rem] leading-relaxed">
+            {handoff.reply}
+          </p>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -488,6 +579,20 @@ type WidgetOffer = {
 
 type PendingProposal = { id: string; proposal: WidgetProposal };
 
+/**
+ * The apps this board's runs may reach.
+ *
+ * A template scopes its runs to a set of app categories, so the composer offers
+ * the same set: showing an app from another board's categories would let it be
+ * connected here and then sit unused, which reads as a broken connection.
+ * Blank boards have no scope and keep the whole workspace.
+ */
+function appsForTemplate(list: ChatComposerApp[], template?: string | null): ChatComposerApp[] {
+  return list.filter((app) =>
+    templateAllowsAppCategory(template, getIntegration(app.slug)?.category ?? null),
+  );
+}
+
 export function AgentChat({
   agent,
   catalog,
@@ -501,6 +606,11 @@ export function AgentChat({
   apps = [],
   memoryEnabled = true,
   memoryNotes = [],
+  contextLabel = null,
+  starterPrompts = [],
+  dashboardTemplate = null,
+  dashboardWidgetTitles = [],
+  team = null,
 }: {
   agent: AgentDetail;
   catalog: AgentModelCatalog;
@@ -524,6 +634,26 @@ export function AgentChat({
   memoryEnabled?: boolean;
   /** Notes this agent keeps, newest first, for the header's memory drawer. */
   memoryNotes?: AgentMemoryNote[];
+  /** "Dashboard · workbench" line above the transcript, so the chat has a place. */
+  contextLabel?: string | null;
+  /** The template's starter questions, shown while the chat is empty. */
+  starterPrompts?: { label: string; prompt: string }[];
+  /** The active dashboard's template; blank dashboards show no starter strip. */
+  dashboardTemplate?: string | null;
+  /** Titles already on the dashboard, so the strip offers only missing cards. */
+  dashboardWidgetTitles?: string[];
+  /**
+   * Set when this chat is a team chat: the card wears the team's portrait and
+   * name, the empty state offers one chip per teammate, and the copy names the
+   * lead instead of pretending it works alone.
+   */
+  team?: {
+    name: string;
+    avatar: string;
+    color: string;
+    leadAgentId: number | null;
+    members: { id: number; name: string; avatar: string; color: string }[];
+  } | null;
 }) {
   const router = useRouter();
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
@@ -550,6 +680,8 @@ export function AgentChat({
   /** Two-design proposals waiting for a pick. */
   const [widgetProposals, setWidgetProposals] = useState<PendingProposal[]>([]);
   const [widgetEdits, setWidgetEdits] = useState<WidgetEditProposal[]>([]);
+  /** File patches waiting for review; Apply is the only write. */
+  const [projectPatches, setProjectPatches] = useState<ProjectPatchProposal[]>([]);
   /** Whole-layout suggestions waiting for Add; cleared when answered. */
   const [layoutProposals, setLayoutProposals] = useState<
     { id: string; template: string; reason: string }[]
@@ -562,11 +694,19 @@ export function AgentChat({
   const [memorySaves, setMemorySaves] = useState<
     { id: number; content: string; tags: string[] }[]
   >([]);
+  /** Teammate answers this session, so the lead's summary can be checked. */
+  const [handoffs, setHandoffs] = useState<
+    Extract<AgentStreamEvent, { type: "handoff" }>["handoff"][]
+  >([]);
   const [input, setInput] = useState("");
+  // A workbench chip drops its question in the field; the owner still sends it.
+  useComposerPrefill(setInput);
   /** Which Add-menu dialog is open; its form starts from the draft below. */
   const [addMode, setAddMode] = useState<ComposerAddMode>(null);
   /** The text that dialog is about: the composer draft or a finished reply. */
   const [addDraft, setAddDraft] = useState("");
+  /** Attaching a workspace project (a folder here or a GitHub clone) from chat. */
+  const [projectDialog, setProjectDialog] = useState(false);
   const [attachments, setAttachments] = useState<ChatComposerAttachment[]>([]);
   /** The File objects behind those chips, so their text can ride with the turn. */
   const attachmentFilesRef = useRef(new Map<string, File[]>());
@@ -579,7 +719,9 @@ export function AgentChat({
   /** The text a record option was armed for, so its form can clear the field. */
   const actionDraftRef = useRef("");
   const [error, setError] = useState<string | null>(null);
-  const [composerApps, setComposerApps] = useState<ChatComposerApp[]>(apps);
+  const [composerApps, setComposerApps] = useState<ChatComposerApp[]>(() =>
+    appsForTemplate(apps, dashboardTemplate),
+  );
   const [confirmNewChat, setConfirmNewChat] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [drawerNotes, setDrawerNotes] = useState<AgentMemoryNote[]>(memoryNotes);
@@ -857,8 +999,8 @@ export function AgentChat({
   }
 
   useEffect(() => {
-    setComposerApps(apps);
-  }, [apps]);
+    setComposerApps(appsForTemplate(apps, dashboardTemplate));
+  }, [apps, dashboardTemplate]);
 
   useEffect(() => {
     return () => {
@@ -1063,6 +1205,13 @@ export function AgentChat({
       .filter(Boolean)
       .join("\n\n");
 
+    if (content.length > AGENT_CHAT_MAX_MESSAGE_LENGTH) {
+      setError(
+        `That message is ${content.length.toLocaleString()} characters; one send carries ${AGENT_CHAT_MAX_MESSAGE_LENGTH.toLocaleString()}. Shorten it or remove an attachment.`,
+      );
+      return;
+    }
+
     const userMessage: ChatMessage = {
       id: `msg-${Date.now()}`,
       role: "user",
@@ -1070,11 +1219,15 @@ export function AgentChat({
       createdAt: new Date().toISOString(),
     };
     const nextMessages = [...messages, userMessage];
-    // Older pages stay in storage; the model only needs the recent context and
-    // the route rejects bodies above its own limit.
-    const payload: AgentChatMessage[] = nextMessages
-      .slice(-MAX_CONTEXT_MESSAGES)
-      .map(({ role, content: text }) => ({ role, content: text }));
+    // Older pages stay in storage; the model only needs the recent context, and
+    // the route caps every message, so past turns are clipped here instead of
+    // rejecting the send.
+    const outgoing = nextMessages.slice(-AGENT_CHAT_MAX_MESSAGES);
+    const payload: AgentChatMessage[] = outgoing.map((message, index) => ({
+      role: message.role,
+      content:
+        index === outgoing.length - 1 ? message.content : clipForContext(message.content),
+    }));
 
     setMessages(nextMessages);
     if (!override) setInput("");
@@ -1088,6 +1241,9 @@ export function AgentChat({
       browser: AGENT_TOOL_LIMITS.browser,
     });
     setStreaming({ content: "", steps: [], sources: [], cards: [] });
+    // A hand-off card belongs to the reply that made it; the next turn starts
+    // its own set so old teammate answers never drift to the bottom.
+    setHandoffs([]);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -1096,6 +1252,7 @@ export function AgentChat({
     let steps: ChatToolStep[] = [];
     let sources: ChatSource[] = [];
     let cards: AgentResultCard[] = [];
+    let streamedHandoffs: HandoffResult[] = [];
     let streamError: string | null = null;
     let finished = false;
 
@@ -1143,7 +1300,13 @@ export function AgentChat({
             case "tool_started":
               steps = [
                 ...steps,
-                { name: event.name, label: event.label, status: "running", startedAt: Date.now() },
+                {
+                  name: event.name,
+                  label: event.label,
+                  detail: event.detail,
+                  status: "running",
+                  startedAt: Date.now(),
+                },
               ];
               setStreaming({ content: text, steps, sources, cards });
               break;
@@ -1170,6 +1333,14 @@ export function AgentChat({
                   : [...current, event.memory],
               );
               break;
+            case "handoff":
+              streamedHandoffs.push(event.handoff);
+              setHandoffs((current) =>
+                current.some((entry) => entry.id === event.handoff.id)
+                  ? current
+                  : [...current, event.handoff],
+              );
+              break;
             case "app_result":
               cards = [...cards, event.card];
               setStreaming({ content: text, steps, sources, cards });
@@ -1192,6 +1363,13 @@ export function AgentChat({
               break;
             case "widget_edit":
               setWidgetEdits((current) =>
+                current.some((entry) => entry.id === event.proposal.id)
+                  ? current
+                  : [...current, event.proposal],
+              );
+              break;
+            case "project_patch":
+              setProjectPatches((current) =>
                 current.some((entry) => entry.id === event.proposal.id)
                   ? current
                   : [...current, event.proposal],
@@ -1279,8 +1457,11 @@ export function AgentChat({
             steps: steps.length > 0 ? steps : undefined,
             sources: sources.length > 0 ? sources : undefined,
             cards: cards.length > 0 ? cards : undefined,
+            handoffs: streamedHandoffs.length > 0 ? streamedHandoffs : undefined,
           },
         ]);
+        // The cards are part of the reply now; the live strip would duplicate them.
+        setHandoffs([]);
       }
 
       if (streamError) {
@@ -1499,10 +1680,20 @@ export function AgentChat({
   }
 
   return (
-    <section className="flex h-[calc(100dvh-8.5rem)] min-h-[380px] sm:min-h-[460px] flex-col overflow-hidden premium-panel rounded-2xl lg:h-full lg:min-h-0">
+    // The workspace bounds the height, so the card simply fills its column:
+    // header and composer stay put while only the transcript scrolls.
+    <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden premium-panel rounded-2xl">
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/60 bg-muted/30 px-3 sm:px-4 py-1.5">
         <p className="min-w-0 truncate text-[0.66rem] text-muted-foreground">
-          Chat history is saved for this agent.
+          {contextLabel ? (
+            <>
+              <span className="font-medium text-foreground/80">{contextLabel}</span>
+              <span aria-hidden className="mx-1.5 text-border">
+                ·
+              </span>
+            </>
+          ) : null}
+          {team ? "History is saved to the team's lead." : "Chat history is saved for this agent."}
         </p>
         <Button
           type="button"
@@ -1534,8 +1725,9 @@ export function AgentChat({
           <AlertDialogHeader>
             <AlertDialogTitle>Start a new chat?</AlertDialogTitle>
             <AlertDialogDescription>
-              This permanently deletes every saved message with {agent.name}, so the next reply
-              starts with no history. Approval records, widgets, schedules and tasks stay.
+              {team
+                ? `This permanently deletes the team's saved history — it belongs to ${agent.name}, the lead — so the next reply starts with none. Approval records, widgets, schedules and tasks stay.`
+                : `This permanently deletes every saved message with ${agent.name}, so the next reply starts with no history. Approval records, widgets, schedules and tasks stay.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {newChatError ? (
@@ -1560,11 +1752,32 @@ export function AgentChat({
         </AlertDialogContent>
       </AlertDialog>
 
-      <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-border/60 px-3 sm:px-4 py-2 sm:py-3">
+      <header className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-border/60 px-3 py-2 sm:px-4 sm:py-3">
         <div className="flex items-center gap-2.5 min-w-0">
-          <AgentAvatar avatar={agent.avatar} color={agent.color} className="size-8 shrink-0" />
+          <AgentAvatar
+            avatar={team ? team.avatar : agent.avatar}
+            color={team ? team.color : agent.color}
+            className="size-8 shrink-0"
+          />
           <div className="min-w-0">
-            <p className="truncate text-[0.88rem] font-semibold">{agent.name}</p>
+            <p className="truncate text-[0.88rem] font-semibold">
+              {team ? team.name : agent.name}
+            </p>
+            {team ? (
+              <p
+                className="truncate text-[0.68rem] text-muted-foreground/90"
+                title={`Team chat with ${agent.name} as lead`}
+              >
+                Lead · {agent.name}
+              </p>
+            ) : agent.objective ? (
+              <p
+                className="truncate text-[0.68rem] text-muted-foreground/90"
+                title={agent.objective}
+              >
+                {agent.objective}
+              </p>
+            ) : null}
             <p className="flex items-center gap-1.5 text-[0.7rem] text-muted-foreground">
               <span
                 className={cn(
@@ -1755,7 +1968,9 @@ export function AgentChat({
         </p>
       ) : null}
 
-      {widgets.length === 0 ? <TemplateSuggestionStrip /> : null}
+      {widgets.length === 0 ? (
+        <TemplateSuggestionStrip template={dashboardTemplate} existingTitles={dashboardWidgetTitles} />
+      ) : null}
 
       <AgentWidgetStrip
         widgets={widgets}
@@ -1809,23 +2024,71 @@ export function AgentChat({
             void loadOlder();
           }
         }}
-        className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-background px-4 py-5"
+        className="min-h-0 min-w-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto bg-background px-4 py-5"
       >
         {messages.length === 0 && !streaming ? (
           <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-            <AgentAvatar avatar={agent.avatar} color={agent.color} className="size-10" />
-            <p className="mt-3 text-[0.9rem] font-semibold">Ask {agent.name} anything</p>
-            <p className="mt-1 max-w-xs text-[0.76rem] leading-relaxed text-muted-foreground">
-              Your agent thinks through the problem before answering. Start with a question, a
-              task or a rough idea.
+            <AgentAvatar
+              avatar={team ? team.avatar : agent.avatar}
+              color={team ? team.color : agent.color}
+              className="size-10"
+            />
+            <p className="mt-3 text-[0.9rem] font-semibold">
+              {team ? "Talk to the team" : `Ask ${agent.name} anything`}
             </p>
+            <p className="mt-1 max-w-xs text-[0.76rem] leading-relaxed text-muted-foreground">
+              {team
+                ? `${agent.name} leads this chat and can hand a piece of the work to a teammate. Name one below to start with them, or describe the job and the lead decides.`
+                : "Your agent thinks through the problem before answering. Start with a question, a task or a rough idea."}
+            </p>
+            {team && team.members.length > 1 ? (
+              <div className="mt-3 flex flex-wrap justify-center gap-1.5">
+                {team.members
+                  .filter((member) => member.id !== team.leadAgentId)
+                  .map((member) => (
+                    <button
+                      key={member.id}
+                      type="button"
+                      onClick={() => {
+                        setInput(`Ask ${member.name} to `);
+                        composerRef.current?.focus();
+                      }}
+                      title={`Start a message for ${member.name}`}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2 py-1 text-[0.68rem] font-medium text-foreground/80 transition-colors hover:border-brand-border hover:bg-brand-soft hover:text-brand-ink"
+                    >
+                      <AgentAvatar avatar={member.avatar} color={member.color} className="size-4" />
+                      Ask {member.name}
+                    </button>
+                  ))}
+              </div>
+            ) : null}
             <span className="mt-3 flex items-center gap-1.5 rounded-full bg-muted/70 px-2.5 py-1 text-[0.65rem] text-muted-foreground">
               <MessageSquare className="size-3" />
               {currentModel.name}
             </span>
+
+            {starterPrompts.length > 0 ? (
+              <div className="mt-5 w-full max-w-sm">
+                <p className="text-[0.6rem] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                  Start with this template
+                </p>
+                <div className="mt-1.5 grid gap-1.5">
+                  {starterPrompts.map((item) => (
+                    <button
+                      key={item.label}
+                      type="button"
+                      onClick={() => setInput(item.prompt)}
+                      className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-left text-[0.72rem] text-foreground/85 transition-colors hover:border-brand-border hover:bg-brand-soft hover:text-brand-ink"
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : (
-          <div className="mx-auto flex w-full max-w-[720px] flex-col gap-4">
+          <div className="mx-auto flex w-full max-w-[860px] flex-col gap-4">
             {hasMore || olderError ? (
               <div className="flex flex-col items-center gap-1 pb-1">
                 {hasMore ? (
@@ -1858,6 +2121,20 @@ export function AgentChat({
                 key={message.id}
                 message={message}
                 agent={agent}
+                onDismissHandoff={(messageId, handoffId) =>
+                  setMessages((current) =>
+                    current.map((entry) =>
+                      entry.id === messageId
+                        ? {
+                            ...entry,
+                            handoffs: entry.handoffs?.filter(
+                              (handoff) => handoff.id !== handoffId,
+                            ),
+                          }
+                        : entry,
+                    ),
+                  )
+                }
                 onAddTask={(text) => openAdd("task", text)}
                 onAddSkill={(text) => openAdd("skill", text)}
                 onSaveDiagram={(source) => openAdd("diagram", source)}
@@ -1926,6 +2203,20 @@ export function AgentChat({
                 }}
                 onDismiss={() =>
                   setWidgetEdits((current) =>
+                    current.filter((entry) => entry.id !== proposal.id),
+                  )
+                }
+              />
+            ))}
+
+            {projectPatches.map((proposal) => (
+              <ProjectPatchCard
+                key={proposal.id}
+                proposal={proposal}
+                className="ml-9 max-w-[94%] sm:max-w-[88%]"
+                onApplied={() => router.refresh()}
+                onDismiss={() =>
+                  setProjectPatches((current) =>
                     current.filter((entry) => entry.id !== proposal.id),
                   )
                 }
@@ -2019,6 +2310,19 @@ export function AgentChat({
               </div>
             )}
 
+            {handoffs.length > 0 && (
+              <div className="ml-9 max-w-[94%] space-y-1.5 sm:max-w-[88%]">
+                <HandoffList
+                  handoffs={handoffs}
+                  onDismiss={(handoffId) =>
+                    setHandoffs((current) =>
+                      current.filter((entry) => entry.id !== handoffId),
+                    )
+                  }
+                />
+              </div>
+            )}
+
             {connectRequests.length > 0 && (
               <div className="space-y-2">
                 {connectRequests.map((request) => (
@@ -2082,6 +2386,7 @@ export function AgentChat({
             event.target.value = "";
           }}
         />
+        <AttachProjectDialog open={projectDialog} onClose={() => setProjectDialog(false)} />
         <ComposerAddDialogs
           mode={addMode}
           draft={addDraft}
@@ -2094,7 +2399,7 @@ export function AgentChat({
           onValueChange={setInput}
           onSend={(message, details) => void send(message, details)}
           busy={isSending}
-          placeholder={`Message ${agent.name}…`}
+          placeholder={team ? `Message ${team.name}…` : `Message ${agent.name}…`}
           attachments={attachments}
           onRemoveAttachment={(id) => {
             attachmentFilesRef.current.delete(id);
@@ -2102,6 +2407,7 @@ export function AgentChat({
           }}
           onAttach={() => fileInputRef.current?.click()}
           onAttachFolder={() => folderInputRef.current?.click()}
+          onAttachProject={() => setProjectDialog(true)}
           addAction={composerAction}
           onAddActionChange={setComposerAction}
           error={error}

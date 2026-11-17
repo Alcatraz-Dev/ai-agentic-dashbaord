@@ -25,12 +25,20 @@ import { TextField } from "@/components/ui/text-field";
 import {
   AGENT_INSTRUCTIONS_MAX_LENGTH,
   AGENT_NAME_MAX_LENGTH,
+  AGENT_OBJECTIVE_MAX_LENGTH,
   DEFAULT_AGENT_AVATAR,
   DEFAULT_AGENT_COLOR,
   getAgentAvatarLabel,
   getAgentColor,
 } from "@/lib/agent-options";
 import { cn } from "@/lib/utils";
+
+const OBJECTIVE_STARTERS = [
+  { label: "Inbox zero", text: "Keep my inbox at zero and flag anything urgent." },
+  { label: "Research", text: "Find reliable answers and bring back sources I can trust." },
+  { label: "Publish", text: "Turn ideas into on-brand content that is ready to publish." },
+  { label: "Ship code", text: "Help me ship working code, with tests and clear explanations." },
+] as const;
 
 const INSTRUCTION_STARTERS = [
   {
@@ -80,6 +88,7 @@ export function CreateAgentButton({
   const [color, setColor] = useState(DEFAULT_AGENT_COLOR);
   const [provider, setProvider] = useState(models.defaultKey);
   const [modelQuery, setModelQuery] = useState("");
+  const [objective, setObjective] = useState("");
   const [instructions, setInstructions] = useState("");
   const [nameError, setNameError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,6 +116,7 @@ export function CreateAgentButton({
     setColor(DEFAULT_AGENT_COLOR);
     setProvider(models.defaultKey);
     setModelQuery("");
+    setObjective("");
     setInstructions("");
     setNameError(null);
     setError(null);
@@ -138,6 +148,7 @@ export function CreateAgentButton({
         avatar,
         color,
         provider,
+        objective,
         instructions,
       });
 
@@ -388,6 +399,46 @@ export function CreateAgentButton({
                 ) : null}
               </section>
             </div>
+
+            {/* Objective */}
+            <section className="mt-6 space-y-3 border-t border-border/70 pt-5">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <h3 className="text-[0.72rem] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
+                    Objective
+                  </h3>
+                  <p className="mt-1 text-[0.75rem] text-muted-foreground">
+                    Optional. One line on what this agent is for, so every run knows what to aim at.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="inline-flex items-center gap-1 text-[0.66rem] text-muted-foreground">
+                    <Wand2 className="size-3" /> Starters:
+                  </span>
+                  {OBJECTIVE_STARTERS.map((starter) => (
+                    <button
+                      key={starter.label}
+                      type="button"
+                      onClick={() => setObjective(starter.text)}
+                      className="rounded-full border border-border bg-card px-2.5 py-1 text-[0.66rem] font-medium text-foreground transition-colors hover:bg-muted"
+                    >
+                      {starter.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <TextField
+                id="agent-objective"
+                name="objective"
+                aria-label="Agent objective"
+                value={objective}
+                onChange={(event) => setObjective(event.target.value)}
+                maxLength={AGENT_OBJECTIVE_MAX_LENGTH}
+                counter
+                placeholder="e.g. Keep my inbox at zero and brief me on anything urgent"
+                autoComplete="off"
+              />
+            </section>
 
             {/* Instructions */}
             <section className="mt-6 space-y-3 border-t border-border/70 pt-5">

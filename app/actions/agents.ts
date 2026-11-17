@@ -3,6 +3,7 @@
 import {
   AGENT_INSTRUCTIONS_MAX_LENGTH,
   AGENT_NAME_MAX_LENGTH,
+  AGENT_OBJECTIVE_MAX_LENGTH,
   DEFAULT_AGENT_COLOR,
   isAgentColor,
   isAgentProvider,
@@ -52,6 +53,7 @@ import {
   normalizeModelBaseUrl,
   type CustomModelOption,
 } from "@/lib/agent-model-discovery";
+import { getActiveDashboardForProfile } from "@/lib/dashboards";
 import { agentLimitError } from "@/lib/plan-usage";
 import { encryptSecret } from "@/lib/secrets";
 import { requireUser } from "@/lib/session";
@@ -88,6 +90,7 @@ export type CreateAgentInput = {
   avatar: string;
   color: string;
   provider: string;
+  objective?: string | null;
   instructions?: string | null;
 };
 
@@ -108,6 +111,14 @@ export async function createAgentAction(input: CreateAgentInput): Promise<Create
   if (!name) return { ok: false, error: "Give your agent a name." };
   if (name.length > AGENT_NAME_MAX_LENGTH) {
     return { ok: false, error: `Keep the name under ${AGENT_NAME_MAX_LENGTH} characters.` };
+  }
+
+  const objective = (input.objective ?? "").trim();
+  if (objective.length > AGENT_OBJECTIVE_MAX_LENGTH) {
+    return {
+      ok: false,
+      error: `Keep the objective under ${AGENT_OBJECTIVE_MAX_LENGTH} characters.`,
+    };
   }
 
   const instructions = (input.instructions ?? "").trim();
@@ -132,13 +143,22 @@ export async function createAgentAction(input: CreateAgentInput): Promise<Create
       ? requestedProvider
       : defaultAgentModelKey();
 
-    const agent = await createAgentForUser(profile.id, {
-      name,
-      avatar: normalizeAgentAvatar(avatar),
-      color: isAgentColor(color) ? color : DEFAULT_AGENT_COLOR,
-      provider,
-      instructions: instructions || null,
-    });
+    // A new agent joins the dashboard it was created from, so the next
+    // dashboard switch doesn't show it under someone else's board.
+    const dashboard = await getActiveDashboardForProfile(profile.id);
+
+    const agent = await createAgentForUser(
+      profile.id,
+      {
+        name,
+        avatar: normalizeAgentAvatar(avatar),
+        color: isAgentColor(color) ? color : DEFAULT_AGENT_COLOR,
+        provider,
+        objective: objective || null,
+        instructions: instructions || null,
+      },
+      dashboard?.id ?? null,
+    );
 
     return { ok: true, agent };
   } catch (error) {
@@ -152,6 +172,7 @@ export type UpdateAgentInput = {
   name: string;
   avatar: string;
   color: string;
+  objective?: string | null;
   instructions?: string | null;
 };
 
@@ -179,6 +200,14 @@ export async function updateAgentAction(input: UpdateAgentInput): Promise<Update
     return { ok: false, error: `Keep the name under ${AGENT_NAME_MAX_LENGTH} characters.` };
   }
 
+  const objective = (input.objective ?? "").trim();
+  if (objective.length > AGENT_OBJECTIVE_MAX_LENGTH) {
+    return {
+      ok: false,
+      error: `Keep the objective under ${AGENT_OBJECTIVE_MAX_LENGTH} characters.`,
+    };
+  }
+
   const instructions = (input.instructions ?? "").trim();
   if (instructions.length > AGENT_INSTRUCTIONS_MAX_LENGTH) {
     return {
@@ -196,6 +225,7 @@ export async function updateAgentAction(input: UpdateAgentInput): Promise<Update
       name,
       avatar: normalizeAgentAvatar(avatar),
       color: isAgentColor(color) ? color : DEFAULT_AGENT_COLOR,
+      objective: objective || null,
       instructions: instructions || null,
     });
 

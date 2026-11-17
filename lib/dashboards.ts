@@ -3,7 +3,7 @@ import "server-only";
 import { and, asc, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 
-import { dashboards, db, users } from "@/db";
+import { agents, dashboards, db, users } from "@/db";
 import { normalizeDashboardAppearance } from "@/lib/widget-appearance";
 import { ensureUserRecord } from "@/lib/users";
 import type { AuthUser } from "@/lib/auth-types";
@@ -162,6 +162,27 @@ export async function createDashboardForUser(user: AuthUser, input: NewDashboard
     .returning();
 
   return row ?? null;
+}
+
+/**
+ * The template of the dashboard an agent belongs to, or null when the agent has
+ * no board. The runtime reads this so a run follows its own board's scope, not
+ * whichever dashboard happens to be open in the browser.
+ */
+export async function getDashboardTemplateForAgent(
+  profileId: number,
+  agentId: number,
+): Promise<string | null> {
+  if (!Number.isInteger(agentId) || agentId <= 0) return null;
+
+  const [row] = await db
+    .select({ template: dashboards.template })
+    .from(agents)
+    .innerJoin(dashboards, eq(agents.dashboardId, dashboards.id))
+    .where(and(eq(agents.id, agentId), eq(agents.ownerId, profileId)))
+    .limit(1);
+
+  return row?.template ?? null;
 }
 
 /**

@@ -212,6 +212,22 @@ export function modelInfoForId(rawId: string): AgentModelInfo {
 }
 
 /** `ai:openai/gpt-5.4` and `openai/gpt-5.4` name the same built-in model. */
+/**
+ * True for ids a chat completion can actually run.
+ *
+ * The gateway lists embeddings, image and audio models, moderation models and
+ * `:batch` variants beside the chat models. Offering those in a picker is what
+ * made a chosen "Edit with AI" model fail the run it was picked for.
+ */
+export function isChatModelId(id: string): boolean {
+  const lower = id.toLowerCase();
+  if (lower.includes(":batch") || lower.includes(":free")) return false;
+
+  return !/(embed|rerank|moderation|whisper|tts|transcri|audio|speech|dall-e|gpt-image|image-gen|stable-diffusion|flux|recraft|\bocr\b|upscal)/.test(
+    lower,
+  );
+}
+
 export function modelIdFromKey(key: string): string {
   const trimmed = key.trim();
   return trimmed.startsWith("ai:") ? trimmed.slice(3) : trimmed;

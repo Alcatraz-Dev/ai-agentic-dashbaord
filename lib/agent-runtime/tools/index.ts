@@ -22,6 +22,11 @@ import {
   checkAppConnection,
 } from "@/lib/agent-runtime/tools/integrations";
 import { MEMORY_TOOL_LABELS } from "@/lib/agent-runtime/tools/memory";
+import {
+  PROJECT_TOOLS,
+  PROJECT_TOOL_LABELS,
+  PROJECT_TOOL_SUMMARIES,
+} from "@/lib/agent-runtime/tools/project";
 import { readWebPage } from "@/lib/agent-runtime/tools/read-page";
 import {
   TASK_TOOLS,
@@ -221,6 +226,7 @@ export function getAgentTools(
       (entry) => allowed.has(entry.id) && (!narrowed || narrowed.has(entry.id)),
     ).map((entry) => entry.tool),
     ...CONNECTION_TOOLS.map((entry) => entry.tool),
+    ...PROJECT_TOOLS,
     ...TASK_TOOLS,
     ...WIDGET_TOOLS,
     ...SCHEDULE_TOOLS,
@@ -242,6 +248,7 @@ export function listAgentToolSummaries(
       summary,
     })),
     ...CONNECTION_TOOLS.map(({ name, summary }) => ({ name, summary })),
+    ...PROJECT_TOOL_SUMMARIES,
     ...TASK_TOOL_SUMMARIES,
     ...WIDGET_TOOL_SUMMARIES,
     ...SCHEDULE_TOOL_SUMMARIES,
@@ -289,6 +296,9 @@ export function getAgentToolLabel(name: string): string {
 
   const connection = CONNECTION_TOOLS.find((entry) => entry.name === name)?.label;
   if (connection) return connection;
+
+  const project = PROJECT_TOOL_LABELS[name];
+  if (project) return project;
 
   const task = TASK_TOOL_LABELS[name];
   if (task) return task;

@@ -14,6 +14,7 @@ import {
   Loader2,
   Play,
   Plus,
+  Search,
   Sparkles,
   Trash2,
   UserPlus,
@@ -159,6 +160,21 @@ const COLUMN_TONE: Record<TaskStatus, string> = {
   done: "bg-emerald-500",
 };
 
+/** Priority reads as a left edge on the card, so scan order is visual too. */
+const PRIORITY_EDGE: Record<TaskPriority, string> = {
+  high: "border-l-rose-500",
+  normal: "border-l-border",
+  low: "border-l-sky-500",
+};
+
+/** What an empty column says when the board itself has cards. */
+const EMPTY_COLUMN: Record<TaskStatus, string> = {
+  todo: "Nothing queued. Add a card here when the work is decided.",
+  doing: "Nothing in flight.",
+  review: "Nothing waiting for a read-through.",
+  done: "Nothing finished yet.",
+};
+
 /** The little dot that says how far one role has got. */
 const ROLE_STATUS_TONE: Record<TaskStatus, string> = {
   todo: "bg-muted-foreground/30",
@@ -193,6 +209,15 @@ export function TaskBoard({
   const [dragId, setDragId] = useState<number | null>(null);
   const [drop, setDrop] = useState<DropTarget | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Filters narrow what is on screen; they never touch a stored row. Dragging
+  // is switched off while they are on, because a filtered column has no honest
+  // insertion index for the full list.
+  const [query, setQuery] = useState("");
+  const [priorityFilter, setPriorityFilter] = useState<TaskPriority | "all">("all");
+  const [agentFilter, setAgentFilter] = useState<number | "all">("all");
+  const [dueFilter, setDueFilter] = useState<"all" | "overdue" | "today" | "none">("all");
+  /** Which column's composer is open; at most one at a time. */
+  const [adding, setAdding] = useState<TaskStatus | null>(null);
   const [editing, setEditing] = useState<TaskSummary | null>(null);
   const [editForm, setEditForm] = useState({
     title: "",
@@ -215,13 +240,64 @@ export function TaskBoard({
   const stepDraftRef = useRef<HTMLInputElement>(null);
 
   const today = todayKey();
+  const normalizedQuery = query.trim().toLowerCase();
+  const filtersActive =
+    normalizedQuery.length > 0 || priorityFilter !== "all" || agentFilter !== "all" || dueFilter !== "all";
+
+  const filtered = useMemo(
+    () =>
+      tasks.filter((task) => {
+        if (priorityFilter !== "all" && task.priority !== priorityFilter) return false;
+
+        if (agentFilter !== "all") {
+          const onCard =
+            task.assignees.some((person) => person.agent?.id === agentFilter) ||
+            task.sourceAgent?.id === agentFilter;
+          if (!onCard) return false;
+        }
+
+        if (dueFilter === "overdue") {
+          if (task.status === "done" || !task.dueDate || task.dueDate >= today) return false;
+        } else if (dueFilter === "today") {
+          if (task.dueDate !== today) return false;
+        } else if (dueFilter === "none" && task.dueDate) {
+          return false;
+        }
+
+        if (normalizedQuery) {
+          const haystack = [
+            task.title,
+            task.notes ?? "",
+            ...task.assignees.flatMap((person) => [person.role.label, person.agent?.name ?? ""]),
+            task.sourceAgent?.name ?? "",
+          ]
+            .join(" ")
+            .toLowerCase();
+          if (!haystack.includes(normalizedQuery)) return false;
+        }
+
+        return true;
+      }),
+    [tasks, normalizedQuery, priorityFilter, agentFilter, dueFilter, today],
+  );
+
   const columns = TASK_STATUSES.map((status) => ({
     status,
-    cards: tasks.filter((task) => task.status === status).sort(byPosition),
+    cards: filtered.filter((task) => task.status === status).sort(byPosition),
   }));
   const doneCount = tasks.filter((task) => task.status === "done").length;
   const openCount = tasks.length - doneCount;
   const percent = tasks.length === 0 ? 0 : Math.round((doneCount / tasks.length) * 100);
+  const overdueCount = tasks.filter(
+    (task) => task.status !== "done" && task.dueDate && task.dueDate < today,
+  ).length;
+
+  function clearFilters() {
+    setQuery("");
+    setPriorityFilter("all");
+    setAgentFilter("all");
+    setDueFilter("all");
+  }
   const roleRows = useMemo(
     () => new Set(tasks.flatMap((task) => task.assignees.map((person) => person.role.key))).size,
     [tasks],
@@ -309,16 +385,21 @@ export function TaskBoard({
     move(dragId, status, index);
   }
 
-  async function add(status: TaskStatus) {
+  async function add(status: TaskStatus): Promise<boolean> {
     const title = (drafts[status] ?? "").trim();
-    if (!title) return;
+    if (!title) return false;
 
     setError(null);
     setDrafts((current) => ({ ...current, [status]: "" }));
 
     const result = await createTaskAction({ title, status });
-    if (result.ok) setTasks(result.tasks);
-    else setError(result.error);
+    if (result.ok) {
+      setTasks(result.tasks);
+      return true;
+    }
+
+    setError(result.error);
+    return false;
   }
 
   /** A role's own progress, cycled from the card: queued → working → review → done. */
@@ -620,48 +701,138 @@ export function TaskBoard({
 
   return (
     <>
-      <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-2">
-        <div className="flex items-center gap-2">
-          <span className="aui-chip text-[0.7rem]">
+      <div className="-mx-1 mt-3 rounded-2xl border border-border bg-card/60 px-2.5 py-2 sm:mx-0">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <div className="relative min-w-0 flex-1 sm:max-w-[16rem]">
+            <Search
+              className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setQuery("");
+              }}
+              placeholder="Search cards, agents, roles…"
+              aria-label="Search cards"
+              className="h-8 pl-7 text-[0.74rem]"
+            />
+          </div>
+
+          <select
+            value={priorityFilter}
+            aria-label="Filter by priority"
+            onChange={(event) =>
+              setPriorityFilter(event.target.value as TaskPriority | "all")
+            }
+            className={cn(SMALL_SELECT, "h-8")}
+          >
+            <option value="all">Any priority</option>
+            {TASK_PRIORITIES.map((priority) => (
+              <option key={priority} value={priority}>
+                {TASK_PRIORITY_LABELS[priority]}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={agentFilter === "all" ? "all" : String(agentFilter)}
+            aria-label="Filter by agent"
+            onChange={(event) =>
+              setAgentFilter(event.target.value === "all" ? "all" : Number(event.target.value))
+            }
+            disabled={agents.length === 0}
+            className={cn(SMALL_SELECT, "h-8")}
+          >
+            <option value="all">Any agent</option>
+            {agents.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.name}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={dueFilter}
+            aria-label="Filter by due date"
+            onChange={(event) =>
+              setDueFilter(event.target.value as "all" | "overdue" | "today" | "none")
+            }
+            className={cn(SMALL_SELECT, "h-8")}
+          >
+            <option value="all">Any due date</option>
+            <option value="overdue">Overdue</option>
+            <option value="today">Due today</option>
+            <option value="none">No due date</option>
+          </select>
+
+          {filtersActive && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={clearFilters}
+              className="h-8 gap-1 px-2 text-[0.7rem] text-muted-foreground"
+            >
+              <X className="size-3.5" />
+              Clear
+            </Button>
+          )}
+
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => setRolesOpen(true)}
+            className="ml-auto h-8 gap-1.5 px-2 text-[0.7rem]"
+          >
+            <Users className="size-3.5" />
+            Roles
+            <span className="text-muted-foreground tabular-nums">{workspaceRoles.length}</span>
+          </Button>
+        </div>
+
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.64rem] text-muted-foreground">
+          <span>
             <span className="font-semibold text-foreground tabular-nums">{openCount}</span> open ·{" "}
             <span className="tabular-nums">{doneCount}</span> done
           </span>
-          <div
-            className="h-1.5 w-24 overflow-hidden rounded-full bg-muted"
-            role="progressbar"
-            aria-label="Tasks completed"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={percent}
-          >
-            <div
-              className="h-full rounded-full bg-emerald-500 transition-[width] duration-300"
-              style={{ width: `${percent}%` }}
-            />
-          </div>
-          <span className="text-[0.66rem] text-muted-foreground tabular-nums">{percent}%</span>
+          <span className="flex items-center gap-1.5">
+            <span
+              className="h-1.5 w-16 overflow-hidden rounded-full bg-muted"
+              role="progressbar"
+              aria-label="Tasks completed"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={percent}
+            >
+              <span
+                className="block h-full rounded-full bg-emerald-500 transition-[width] duration-300"
+                style={{ width: `${percent}%` }}
+              />
+            </span>
+            <span className="tabular-nums">{percent}%</span>
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <UserPlus className="size-3" aria-hidden="true" />
+            <span className="font-semibold text-foreground tabular-nums">{roleRows}</span> roles
+          </span>
+          {overdueCount > 0 && (
+            <span className="font-medium text-rose-600 tabular-nums dark:text-rose-400">
+              {overdueCount} overdue
+            </span>
+          )}
+          {filtersActive ? (
+            <span className="font-medium text-foreground tabular-nums">
+              {filtered.length} of {tasks.length} shown
+            </span>
+          ) : (
+            <span className="hidden sm:inline">
+              Drag a card, use its arrows, or open it for steps and tools.
+            </span>
+          )}
         </div>
-
-        <span className="aui-chip text-[0.68rem]">
-          <UserPlus className="size-3 text-muted-foreground" aria-hidden="true" />
-          <span className="font-semibold text-foreground tabular-nums">{roleRows}</span> roles in play
-        </span>
-
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          onClick={() => setRolesOpen(true)}
-          className="h-7 gap-1.5 px-2 text-[0.7rem]"
-        >
-          <Users className="size-3.5" />
-          Roles
-          <span className="text-muted-foreground tabular-nums">{workspaceRoles.length}</span>
-        </Button>
-
-        <span className="text-[0.68rem] text-muted-foreground">
-          Drag a card, use its arrows, or open it to change its step, roles, steps or tools.
-        </span>
       </div>
 
       {error && (
@@ -670,7 +841,43 @@ export function TaskBoard({
         </p>
       )}
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {tasks.length === 0 && (
+        <div className="mt-3 flex flex-col items-start gap-2 rounded-2xl border border-dashed border-border bg-card/60 px-4 py-5">
+          <p className="text-[0.82rem] font-medium">The board is empty</p>
+          <p className="max-w-lg text-[0.7rem] leading-relaxed text-muted-foreground">
+            A card carries a step, the agents on its roles, its own checklist and the tools a run
+            may use. Add one here — or describe the work in an agent&apos;s chat and accept the card
+            it proposes.
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => setAdding("todo")}
+            className="h-8 gap-1.5 px-2.5 text-[0.72rem]"
+          >
+            <Plus className="size-3.5" />
+            Add the first card
+          </Button>
+        </div>
+      )}
+
+      {filtersActive && filtered.length === 0 && tasks.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-muted/40 px-3 py-2">
+          <p className="text-[0.72rem] text-muted-foreground">No card matches these filters.</p>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={clearFilters}
+            className="h-7 gap-1 px-2 text-[0.7rem]"
+          >
+            <X className="size-3.5" />
+            Clear filters
+          </Button>
+        </div>
+      )}
+
+      <div className="-mx-2 mt-3 flex snap-x snap-mandatory gap-2.5 overflow-x-auto px-2 pb-2 sm:mx-0 sm:grid sm:snap-none sm:grid-cols-2 sm:overflow-visible sm:px-0 xl:grid-cols-4">
         {columns.map(({ status, cards }) => {
           const label = TASK_STATUS_LABELS[status];
           const full = status === "doing" && cards.length >= TASK_WIP_LIMIT;
@@ -692,10 +899,14 @@ export function TaskBoard({
                 dropOn(status, drop?.index ?? cards.length);
               }}
               className={cn(
-                "flex min-h-[18rem] flex-col rounded-2xl border border-border bg-card/60 p-2.5 transition-colors",
+                "flex min-h-[18rem] w-[82vw] max-w-[22rem] shrink-0 snap-start flex-col rounded-2xl border border-border bg-card/60 p-2.5 transition-colors sm:w-auto sm:max-w-none sm:shrink",
                 isDropColumn && "border-brand-border bg-brand-soft/40",
               )}
             >
+              <div
+                className={cn("mb-2 h-0.5 w-full rounded-full opacity-70", COLUMN_TONE[status])}
+                aria-hidden="true"
+              />
               <header className="flex items-start justify-between gap-2 px-0.5 pb-2">
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
@@ -717,37 +928,64 @@ export function TaskBoard({
                 </div>
               </header>
 
-              <form
-                className="flex gap-1.5 pb-2"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void add(status);
-                }}
-              >
-                <Input
-                  value={drafts[status] ?? ""}
-                  onChange={(event) =>
-                    setDrafts((current) => ({ ...current, [status]: event.target.value }))
-                  }
-                  placeholder={`Add to ${label.toLowerCase()}…`}
-                  aria-label={`New task in ${label}`}
-                  className="h-8 text-[0.76rem]"
-                />
-                <Button
-                  type="submit"
-                  size="sm"
-                  variant="secondary"
-                  aria-label={`Add task to ${label}`}
-                  className="h-8 shrink-0 px-2"
+              {adding === status ? (
+                <form
+                  className="flex gap-1.5 pb-2"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void add(status).then((ok) => {
+                      if (ok) setAdding(null);
+                    });
+                  }}
                 >
-                  <Plus className="size-3.5" />
-                </Button>
-              </form>
+                  <Input
+                    autoFocus
+                    value={drafts[status] ?? ""}
+                    onChange={(event) =>
+                      setDrafts((current) => ({ ...current, [status]: event.target.value }))
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") setAdding(null);
+                    }}
+                    placeholder={`Add to ${label.toLowerCase()}…`}
+                    aria-label={`New task in ${label}`}
+                    className="h-8 text-[0.76rem]"
+                  />
+                  <Button
+                    type="submit"
+                    size="sm"
+                    variant="secondary"
+                    aria-label={`Add task to ${label}`}
+                    className="h-8 shrink-0 px-2"
+                  >
+                    <Plus className="size-3.5" />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setAdding(null)}
+                    aria-label="Cancel adding a card"
+                    className="h-8 shrink-0 px-1.5 text-muted-foreground"
+                  >
+                    <X className="size-3.5" />
+                  </Button>
+                </form>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setAdding(status)}
+                  className="mb-2 flex w-full items-center gap-1.5 rounded-lg border border-dashed border-border px-2 py-1.5 text-[0.7rem] font-medium text-muted-foreground transition-colors hover:border-brand-border hover:text-brand-ink"
+                >
+                  <Plus className="size-3.5" aria-hidden="true" />
+                  Add a card
+                </button>
+              )}
 
               <div className="flex flex-1 flex-col gap-1.5">
-                {cards.length === 0 && !isDropColumn && (
-                  <p className="rounded-xl border border-dashed border-border/80 px-3 py-6 text-center text-[0.68rem] text-muted-foreground">
-                    {status === "todo" ? "No cards yet — add the first one above." : "Nothing here."}
+                {cards.length === 0 && tasks.length > 0 && !isDropColumn && (
+                  <p className="rounded-xl border border-dashed border-border/80 px-3 py-6 text-center text-[0.68rem] leading-relaxed text-muted-foreground">
+                    {filtersActive ? "No card here matches the filters." : EMPTY_COLUMN[status]}
                   </p>
                 )}
 
@@ -766,7 +1004,7 @@ export function TaskBoard({
                       {isDropColumn && drop?.index === index && <DropLine />}
 
                       <article
-                        draggable
+                        draggable={!filtersActive}
                         onDragStart={(event) => {
                           setDragId(task.id);
                           event.dataTransfer.effectAllowed = "move";
@@ -785,8 +1023,10 @@ export function TaskBoard({
                           setDrop({ status, index: before ? index : index + 1 });
                         }}
                         className={cn(
-                          "group rounded-xl border border-border bg-card p-2.5 shadow-sm transition-[box-shadow,opacity] hover:shadow-md",
-                          dragId === task.id && "opacity-40",
+                          "group rounded-xl border border-border border-l-2 bg-card p-2.5 shadow-sm transition-[box-shadow,opacity] hover:shadow-md focus-within:ring-1 focus-within:ring-brand-border",
+                          PRIORITY_EDGE[task.priority],
+                          filtersActive ? "cursor-default" : "cursor-grab active:cursor-grabbing",
+                          dragId === task.id && "opacity-40 ring-2 ring-brand-border",
                         )}
                       >
                         <div className="flex items-start gap-1.5">
@@ -815,10 +1055,18 @@ export function TaskBoard({
                               </span>
                             )}
                           </button>
-                          <GripVertical
-                            className="mt-0.5 size-3.5 shrink-0 cursor-grab text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100"
+                          <span
+                            className="mt-0.5 shrink-0"
+                            title={filtersActive ? "Clear filters to drag cards" : "Drag to another step"}
                             aria-hidden="true"
-                          />
+                          >
+                            <GripVertical
+                              className={cn(
+                                "size-3.5 text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100",
+                                filtersActive ? "cursor-default opacity-20" : "cursor-grab",
+                              )}
+                            />
+                          </span>
                         </div>
 
                         {task.assignees.length > 0 && (
@@ -996,7 +1244,7 @@ export function TaskBoard({
                             </Link>
                           )}
 
-                          <span className="ml-auto flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+                          <span className="ml-auto flex items-center gap-0.5 opacity-100 transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100">
                             <button
                               type="button"
                               onClick={() => step(task, -1)}

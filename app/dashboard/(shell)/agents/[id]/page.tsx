@@ -4,7 +4,13 @@ import { notFound } from "next/navigation";
 import { AgentChat } from "@/components/agents/agent-chat";
 import { AgentSidePanel } from "@/components/agents/agent-side-panel";
 import { AgentWorkspace } from "@/components/agents/agent-workspace";
+import { TemplateWorkbench, type WorkbenchData } from "@/components/workspace/template-workbench";
 import { listAgentMcpServers } from "@/lib/agent-mcp";
+import { listBrowserLogins } from "@/lib/browser-logins";
+import { listProjectsForUser } from "@/lib/projects";
+import { getActiveDashboardForProfile } from "@/lib/dashboards";
+import { listTasksForUser } from "@/lib/tasks";
+import { getTemplateWorkbench } from "@/lib/template-workspaces";
 import {
   listAgentScheduleRuns,
   listAgentSchedules,
@@ -12,7 +18,8 @@ import {
 import { listAgentMessagePage } from "@/lib/agent-messages";
 import { listBrowserSessions } from "@/lib/browser-sessions";
 import { hasBrowserProfile } from "@/lib/browserbase/session";
-import { getAgentForUser } from "@/lib/agents";
+import { getAgentForUser, listAgentsForUser } from "@/lib/agents";
+import { listTeamsForUser } from "@/lib/teams";
 import { listCustomDiagramsForUser } from "@/lib/custom-diagrams";
 import { listCustomPluginsForUser } from "@/lib/custom-plugins";
 import { listCustomSkillsForUser } from "@/lib/custom-skills";
@@ -22,7 +29,7 @@ import { getIntegrationsOverview } from "@/lib/composio/connections";
 import type { ChatMessage } from "@/lib/agent-demo";
 import { requireUser } from "@/lib/session";
 import { ensureUserRecord } from "@/lib/users";
-import { listWidgetRefreshRuns, listWidgetsForAgent } from "@/lib/widgets";
+import { listWidgetRefreshRuns, listWidgetsForAgent, listWidgetsForUser } from "@/lib/widgets";
 
 export const metadata: Metadata = { title: "Agent" };
 
@@ -84,9 +91,105 @@ export default async function AgentChatPage({
     steps: message.steps,
     sources: message.sources,
     cards: message.cards,
+    handoffs: message.handoffs,
   }));
 
   const overview = await getIntegrationsOverview(profile.id);
+
+  // The dashboard's template decides which extra pane the agent page carries.
+  const activeDashboard = await getActiveDashboardForProfile(profile.id);
+  const template = activeDashboard?.template ?? "blank";
+  const workbench = getTemplateWorkbench(template);
+
+  // Titles already on the board: the chat offers only this template's missing cards.
+  const dashboardWidgetTitles = activeDashboard
+    ? (await listWidgetsForUser(profile.id, activeDashboard.id)).map((widget) => widget.title)
+    : [];
+
+  const [boardTasks, boardWidgets, savedLogins] = workbench
+    ? await Promise.all([
+        workbench.id === "creator" || workbench.id === "daily"
+          ? listTasksForUser(profile.id)
+          : Promise.resolve<Awaited<ReturnType<typeof listTasksForUser>>>([]),
+        workbench.id === "business"
+          ? listWidgetsForUser(profile.id, activeDashboard?.id ?? null)
+          : Promise.resolve<Awaited<ReturnType<typeof listWidgetsForUser>>>([]),
+        workbench.id === "research"
+          ? listBrowserLogins(profile.id)
+          : Promise.resolve<Awaited<ReturnType<typeof listBrowserLogins>>>([]),
+      ])
+    : [
+        [] as Awaited<ReturnType<typeof listTasksForUser>>,
+        [] as Awaited<ReturnType<typeof listWidgetsForUser>>,
+        [] as Awaited<ReturnType<typeof listBrowserLogins>>,
+      ];
+
+  const projectList = workbench?.id === "developer" ? await listProjectsForUser(profile.id) : [];
+  // The developer pane's Team tab creates teams on this board, so it needs the
+  // same two lists the Teams page uses — and only that template asks for them.
+  const developerTeams =
+    workbench?.id === "developer" && activeDashboard
+      ? await listTeamsForUser(profile.id, activeDashboard.id)
+      : [];
+  const developerAgents =
+    workbench?.id === "developer" && activeDashboard
+      ? await listAgentsForUser(profile.id, activeDashboard.id)
+      : [];
+
+  const workbenchData: WorkbenchData | null = workbench
+    ? {
+        tasks: boardTasks.map((task) => ({
+          id: task.id,
+          title: task.title,
+          status: task.status,
+          priority: task.priority,
+          dueDate: task.dueDate,
+        })),
+        schedules: schedules.map((schedule) => ({
+          id: schedule.id,
+          title: schedule.title,
+          nextRunAt: schedule.nextRunAt,
+          lastRunAt: schedule.lastRunAt,
+          enabled: schedule.enabled,
+          lastStatus: schedule.lastStatus,
+        })),
+        skills: customSkills.map((skill) => ({
+          name: skill.name,
+          description: skill.description,
+        })),
+        diagrams: customDiagrams.map((diagram) => ({
+          name: diagram.name,
+          description: diagram.description,
+        })),
+        logins: savedLogins.map((login) => ({
+          host: login.host,
+          url: login.url,
+          label: login.label,
+        })),
+        widgets: boardWidgets.map((widget) => ({
+          id: widget.id,
+          title: widget.title,
+          metrics: widget.data.metrics.map((metric) => ({
+            label: metric.label,
+            value: metric.value,
+            delta: metric.delta,
+          })),
+        })),
+        // Only research reads them, but the list is already loaded for the
+        // memory drawer and the rail, so nothing extra is queried.
+        notes:
+          workbench.id === "research"
+            ? memoryPanel.notes.map((note) => ({
+                id: note.id,
+                content: note.content,
+                tags: note.tags,
+                createdAt: note.createdAt,
+              }))
+            : [],
+        teams: developerTeams,
+        agents: developerAgents,
+      }
+    : null;
 
   const mostRecentRun = schedules
     .filter((schedule) => schedule.lastRunAt)
@@ -102,6 +205,13 @@ export default async function AgentChatPage({
 
   return (
     <AgentWorkspace
+      template={template}
+      workbenchLabel={workbench?.label}
+      workbench={
+        workbench && workbenchData ? (
+          <TemplateWorkbench template={template} data={workbenchData} projects={projectList} />
+        ) : undefined
+      }
       chat={
         <AgentChat
           agent={agent}
@@ -113,8 +223,16 @@ export default async function AgentChatPage({
           lastScheduleRun={lastScheduleRun}
           initialWidgets={widgets}
           editWidgetId={initialEditWidgetId}
+          dashboardTemplate={template}
+          dashboardWidgetTitles={dashboardWidgetTitles}
           memoryEnabled={memoryPanel.enabled}
           memoryNotes={memoryPanel.notes}
+          contextLabel={
+            activeDashboard
+              ? `${activeDashboard.name}${workbench ? ` · ${workbench.label}` : ""}`
+              : null
+          }
+          starterPrompts={workbench?.prompts ?? []}
           apps={overview.apps.map((app) => ({
             slug: app.slug,
             name: app.name,
@@ -139,6 +257,7 @@ export default async function AgentChatPage({
           diagrams={customDiagrams}
           memoryEnabled={memoryPanel.enabled}
           memoryNotes={memoryPanel.notes.slice(0, 6)}
+          template={template}
         />
       }
     />

@@ -113,11 +113,17 @@ export async function applyDashboardTemplateAction(
     const dashboard = await getDashboardForUser(user.id);
     if (!dashboard) return { ok: false, error: "Create a dashboard first." };
 
-    const agents = await listAgentsForUser(profile.id);
+    // Agents belong to a dashboard, so starter cards go to this board's own
+    // agent. Only agents from before that column existed (null) fall back to
+    // the workspace list, so an old workspace can still seed its first board.
+    const dashboardAgents = await listAgentsForUser(profile.id, dashboard.id);
+    const agents =
+      dashboardAgents.length > 0 ? dashboardAgents : await listAgentsForUser(profile.id);
     if (!agents[0]) {
       return {
         ok: false,
-        error: "Create an AI agent first — every widget belongs to the agent that updates it.",
+        error:
+          "Create an AI agent on this dashboard first — every widget belongs to the agent that updates it.",
       };
     }
 
@@ -225,7 +231,10 @@ export async function createDashboardAction(
 
     // Starter content is a bonus, never a reason to fail the create.
     try {
-      const agents = await listAgentsForUser(profile.id);
+      // Seed with the new board's own agents, never another dashboard's team.
+      const dashboardAgents = await listAgentsForUser(profile.id, created.id);
+      const agents =
+        dashboardAgents.length > 0 ? dashboardAgents : await listAgentsForUser(profile.id);
       if (agents[0]) {
         const usage = await getPlanUsage(profile.id);
         await createStarterWidgetsForUser({

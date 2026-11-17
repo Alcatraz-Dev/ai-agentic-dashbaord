@@ -10,15 +10,19 @@ export type NewAgentInput = {
   avatar: string;
   color: string;
   provider: string;
+  objective: string | null;
   instructions: string | null;
 };
 
 const agentColumns = {
   id: agents.id,
+  dashboardId: agents.dashboardId,
+  teamId: agents.teamId,
   name: agents.name,
   avatar: agents.avatar,
   color: agents.color,
   provider: agents.provider,
+  objective: agents.objective,
   /** Column is text; the UI only ever sees the three known modes. */
   approvalMode: sql<AgentApprovalMode>`${agents.approvalMode}`.as("approval_mode"),
   enabledTools: agents.enabledTools,
@@ -28,12 +32,27 @@ const agentColumns = {
   enabledDiagrams: agents.enabledDiagrams,
 };
 
-/** Agents owned by an app user, oldest first so the sidebar order is stable. */
-export async function listAgentsForUser(profileId: number): Promise<AgentSummary[]> {
+/**
+ * Agents owned by an app user, oldest first so the sidebar order is stable.
+ *
+ * Pass `dashboardId` to read one dashboard's team — the sidebar and the agent
+ * page use that, so switching dashboards shows the agents that belong to it.
+ * Omitting it keeps the workspace-wide list that task roles, schedules and the
+ * jobs index need (an old card may name an agent from another dashboard).
+ */
+export async function listAgentsForUser(
+  profileId: number,
+  dashboardId?: number | null,
+): Promise<AgentSummary[]> {
+  const scope =
+    typeof dashboardId === "number" && Number.isInteger(dashboardId) && dashboardId > 0
+      ? and(eq(agents.ownerId, profileId), eq(agents.dashboardId, dashboardId))
+      : eq(agents.ownerId, profileId);
+
   return db
     .select(agentColumns)
     .from(agents)
-    .where(eq(agents.ownerId, profileId))
+    .where(scope)
     .orderBy(asc(agents.createdAt), asc(agents.id));
 }
 
@@ -55,7 +74,7 @@ export async function getAgentForUser(
 
 export type AgentUpdateInput = Pick<
   NewAgentInput,
-  "name" | "avatar" | "color" | "instructions"
+  "name" | "avatar" | "color" | "objective" | "instructions"
 >;
 
 /**
@@ -253,10 +272,11 @@ export async function deleteAgentForUser(profileId: number, agentId: number): Pr
 export async function createAgentForUser(
   profileId: number,
   input: NewAgentInput,
+  dashboardId: number | null = null,
 ): Promise<AgentSummary> {
   const [row] = await db
     .insert(agents)
-    .values({ ownerId: profileId, ...input })
+    .values({ ownerId: profileId, dashboardId, ...input })
     .returning(agentColumns);
 
   if (!row) throw new Error("The agent insert returned no row.");

@@ -206,6 +206,10 @@ export type WidgetRecord = {
   agentName: string;
   agentAvatar: string;
   agentColor: string;
+  /** The owning agent's stored model key, so an edit can default to it. */
+  agentProvider?: string;
+  /** Model this widget's "Edit with AI" last used; null = the agent's model. */
+  editModel?: string | null;
   title: string;
   subtitle: string | null;
   icon: WidgetIconKey;
@@ -440,7 +444,17 @@ export type WidgetDesignKey =
   | "glass"
   | "neon"
   | "editorial"
-  | "clean";
+  | "clean"
+  | "minimalist"
+  | "retro"
+  | "tech"
+  | "luxury"
+  | "organic"
+  | "paper"
+  | "candy"
+  | "noir"
+  | "blueprint"
+  | "terminal";
 
 export type WidgetDesign = {
   key: WidgetDesignKey;
@@ -466,15 +480,25 @@ export type WidgetDesign = {
   heading?: string;
   /** The illustrated style reserves header space for a scene. */
   illustrated?: boolean;
+  /**
+   * The card's decorative layer. Styles must not differ only by colour: this is
+   * what makes a dot texture, a drafting grid, corner rays or a soft mesh.
+   */
+  decoration?: WidgetDecoration;
 };
 
+/** The decorative layer a style draws behind its data. */
+export type WidgetDecoration = "none" | "dots" | "grid" | "rays" | "mesh";
+
 /**
- * The seven widget styles. Every option is complete on its own, so an agent
- * can offer any two to four without inventing colours or layout.
+ * The seventeen widget styles. Every option is complete on its own — surface,
+ * type personality and a decoration layer — so two cards in different styles
+ * look genuinely different, not merely recoloured.
  */
 export const WIDGET_DESIGNS: WidgetDesign[] = [
   {
     key: "classic",
+    decoration: "dots",
     name: "Classic",
     description: "Clean card that follows your theme",
     shell:
@@ -494,6 +518,7 @@ export const WIDGET_DESIGNS: WidgetDesign[] = [
   },
   {
     key: "illustrated",
+    decoration: "none",
     name: "Illustrated",
     description: "Warm paper with a playful color scene",
     shell:
@@ -514,6 +539,7 @@ export const WIDGET_DESIGNS: WidgetDesign[] = [
   },
   {
     key: "pop",
+    decoration: "none",
     name: "Pop",
     description: "Loud yellow, ink lines, hard shadow",
     shell:
@@ -534,6 +560,7 @@ export const WIDGET_DESIGNS: WidgetDesign[] = [
   },
   {
     key: "glass",
+    decoration: "dots",
     name: "Glass",
     description: "Frosted panels with a cool bloom",
     shell:
@@ -553,6 +580,7 @@ export const WIDGET_DESIGNS: WidgetDesign[] = [
   },
   {
     key: "neon",
+    decoration: "grid",
     name: "Neon",
     description: "Midnight console with an electric lime glow",
     shell:
@@ -573,6 +601,7 @@ export const WIDGET_DESIGNS: WidgetDesign[] = [
   },
   {
     key: "editorial",
+    decoration: "none",
     name: "Editorial",
     description: "Paper-white brief with ink and amber rules",
     shell:
@@ -593,6 +622,7 @@ export const WIDGET_DESIGNS: WidgetDesign[] = [
   },
   {
     key: "clean",
+    decoration: "none",
     name: "Clean",
     description: "Quiet white with fine rules and no flourish",
     shell: "border-border/70 bg-card shadow-[0_1px_2px_rgba(15,23,42,0.05)]",
@@ -609,6 +639,207 @@ export const WIDGET_DESIGNS: WidgetDesign[] = [
     accent: "var(--foreground)",
     area: "fill-foreground/10",
     heading: "font-medium tracking-[-0.02em]",
+  },
+  {
+    key: "minimalist",
+    decoration: "none",
+    name: "Minimalist",
+    description: "Ultra-clean with subtle depth, no noise",
+    shell: "border-border/80 bg-card shadow-sm dark:border-border/60 dark:bg-card",
+    glow: "bg-transparent",
+    title: "text-foreground",
+    muted: "text-muted-foreground/60",
+    divider: "border-border/80 dark:border-border/60",
+    iconTile: "bg-muted text-foreground",
+    chip: "bg-muted text-foreground ring-1 ring-border/80 dark:ring-border/60",
+    value: "text-foreground",
+    positive: "text-emerald-600 dark:text-emerald-400",
+    negative: "text-rose-600 dark:text-rose-400",
+    neutral: "text-muted-foreground/60",
+    accent: "var(--foreground)",
+    area: "fill-foreground/8",
+  },
+  {
+    key: "retro",
+    decoration: "dots",
+    name: "Retro",
+    description: "Vintage amber with distressed texture feel",
+    shell: "border-amber-500/30 bg-amber-50/30 shadow-[4px_4px_0_#111827] dark:border-amber-500/25 dark:bg-amber-950/30 dark:shadow-[4px_4px_0_rgba(251,191,36,0.2)]",
+    glow: "bg-amber-500/40 dark:bg-amber-500/10",
+    title: "text-amber-900 dark:text-amber-100",
+    muted: "text-amber-600/70 dark:text-amber-200/60",
+    divider: "border-amber-500/30 dark:border-amber-500/20",
+    iconTile: "bg-amber-600 text-white dark:bg-amber-500 dark:text-amber-950",
+    chip: "bg-white text-amber-800 ring-1 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-200 dark:ring-amber-500/25",
+    value: "text-amber-900 dark:text-amber-100",
+    positive: "text-emerald-700 dark:text-emerald-400",
+    negative: "text-rose-700 dark:text-rose-400",
+    neutral: "text-amber-600/70 dark:text-amber-200/60",
+    accent: "#d97706",
+    area: "fill-amber-600/15",
+  },
+  {
+    key: "tech",
+    decoration: "grid",
+    name: "Tech",
+    description: "Industrial dark with circuit-inspired accents",
+    shell: "border-slate-800/30 bg-[#0f0f0f] shadow-[0_0_0_1px_rgba(255,255,255,0.03),0_20px_50px_-20px_rgba(255,255,255,0.08)]",
+    glow: "bg-cyan-400/20",
+    title: "text-cyan-400",
+    muted: "text-slate-400/60",
+    divider: "border-slate-800/30",
+    iconTile: "bg-cyan-500 text-slate-950",
+    chip: "bg-slate-900 text-cyan-400 ring-1 ring-cyan-500/30",
+    value: "text-cyan-400",
+    positive: "text-emerald-400",
+    negative: "text-rose-400",
+    neutral: "text-slate-400/60",
+    accent: "#10b981",
+    area: "fill-cyan-600/10",
+  },
+  {
+    key: "luxury",
+    decoration: "rays",
+    name: "Luxury",
+    description: "Premium midnight with gold accents",
+    shell: "border-yellow-300/20 bg-[#0a0a0a] shadow-[0_0_0_1px_rgba(255,215,0,0.1),0_24px_60px_-30px_rgba(255,215,0,0.2)]",
+    glow: "bg-yellow-300/25",
+    title: "text-yellow-300",
+    muted: "text-slate-400/60",
+    divider: "border-yellow-300/20",
+    iconTile: "bg-yellow-300 text-slate-950",
+    chip: "bg-slate-900 text-yellow-300 ring-1 ring-yellow-300/30",
+    value: "text-yellow-300",
+    positive: "text-emerald-400",
+    negative: "text-rose-400",
+    neutral: "text-slate-400/60",
+    accent: "#f59e0b",
+    area: "fill-yellow-600/10",
+  },
+  {
+    key: "organic",
+    decoration: "mesh",
+    name: "Organic",
+    description: "Soft earth tones with flowing lines",
+    shell: "border-green-400/30 bg-[#f0fdf4] shadow-[0_12px_30px_-12px_rgba(34,197,94,0.2)] dark:border-green-500/25 dark:bg-green-950/30 dark:shadow-[0_12px_30px_-12px_rgba(34,197,94,0.15)]",
+    glow: "bg-green-400/20 dark:bg-green-500/10",
+    title: "text-green-800 dark:text-green-100",
+    muted: "text-green-600/60 dark:text-green-200/60",
+    divider: "border-green-400/30 dark:border-green-500/20",
+    iconTile: "bg-green-500 text-white dark:bg-green-600 dark:text-green-50",
+    chip: "bg-white text-green-700 ring-1 ring-green-400/30 dark:bg-green-500/15 dark:text-green-200 dark:ring-green-500/25",
+    value: "text-green-800 dark:text-green-100",
+    positive: "text-emerald-600 dark:text-emerald-400",
+    negative: "text-rose-600 dark:text-rose-400",
+    neutral: "text-green-500/60 dark:text-green-200/60",
+    accent: "#22c55e",
+    area: "fill-green-600/10",
+  },
+  {
+    key: "paper",
+    decoration: "none",
+    name: "Paper",
+    description: "Warm stock, serif headline, fine letterpress rules",
+    shell:
+      "border-stone-300/70 bg-[#fdfbf7] shadow-[0_2px_0_rgba(120,113,108,0.25)] dark:border-stone-700/60 dark:bg-stone-950",
+    glow: "bg-transparent",
+    title: "text-stone-900 dark:text-stone-100",
+    muted: "text-stone-500 dark:text-stone-400",
+    divider: "border-stone-300/70 dark:border-stone-700/60",
+    iconTile: "bg-stone-200 text-stone-700 dark:bg-stone-800 dark:text-stone-200",
+    chip: "bg-stone-100 text-stone-600 ring-1 ring-stone-300/70 dark:bg-stone-800 dark:text-stone-300 dark:ring-stone-700",
+    value: "text-stone-900 dark:text-stone-100",
+    positive: "text-emerald-700 dark:text-emerald-400",
+    negative: "text-rose-700 dark:text-rose-400",
+    neutral: "text-stone-500 dark:text-stone-400",
+    accent: "#78716c",
+    area: "fill-stone-500/10",
+    heading: "font-serif tracking-[-0.015em]",
+  },
+  {
+    key: "candy",
+    decoration: "mesh",
+    name: "Candy",
+    description: "Pastel gradient with a bubbly, rounded voice",
+    shell:
+      "border-pink-200/80 bg-[linear-gradient(135deg,#fdf2f8_0%,#eef2ff_100%)] shadow-[0_18px_40px_-28px_rgba(236,72,153,0.45)] dark:border-pink-400/25 dark:bg-[linear-gradient(135deg,#2a0f22_0%,#1a1230_100%)]",
+    glow: "bg-fuchsia-300/45 dark:bg-fuchsia-500/15",
+    title: "text-fuchsia-900 dark:text-pink-100",
+    muted: "text-fuchsia-700/70 dark:text-pink-200/70",
+    divider: "border-fuchsia-200/80 dark:border-pink-400/20",
+    iconTile:
+      "bg-gradient-to-br from-fuchsia-500 to-indigo-500 text-white shadow-sm shadow-fuchsia-500/30",
+    chip: "bg-white/80 text-fuchsia-700 ring-1 ring-fuchsia-200 dark:bg-white/10 dark:text-pink-200 dark:ring-pink-400/25",
+    value: "text-fuchsia-900 dark:text-pink-50",
+    positive: "text-emerald-700 dark:text-emerald-300",
+    negative: "text-rose-700 dark:text-rose-300",
+    neutral: "text-fuchsia-700/70 dark:text-pink-200/70",
+    accent: "#d946ef",
+    area: "fill-fuchsia-500/15",
+    heading: "font-semibold tracking-[-0.03em]",
+  },
+  {
+    key: "noir",
+    decoration: "none",
+    name: "Noir",
+    description: "High-contrast black on white with heavy capitals",
+    shell:
+      "border-2 border-black bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.9)] dark:border-white dark:bg-black dark:shadow-[0_0_0_1px_rgba(255,255,255,0.9)]",
+    glow: "bg-transparent",
+    title: "text-black dark:text-white",
+    muted: "text-neutral-600 dark:text-neutral-400",
+    divider: "border-black/80 dark:border-white/80",
+    iconTile: "bg-black text-white dark:bg-white dark:text-black",
+    chip: "bg-black text-white ring-1 ring-black dark:bg-white dark:text-black dark:ring-white",
+    value: "text-black dark:text-white",
+    positive: "text-emerald-700 dark:text-emerald-400",
+    negative: "text-rose-700 dark:text-rose-400",
+    neutral: "text-neutral-600 dark:text-neutral-400",
+    accent: "#111111",
+    area: "fill-neutral-900/10",
+    heading: "font-black uppercase tracking-[-0.01em]",
+  },
+  {
+    key: "blueprint",
+    decoration: "grid",
+    name: "Blueprint",
+    description: "Drafting-table navy with a measured technical grid",
+    shell:
+      "border-sky-400/40 bg-[#0b1f3a] shadow-[0_18px_40px_-30px_rgba(2,132,199,0.6)]",
+    glow: "bg-sky-400/25",
+    title: "text-sky-100",
+    muted: "text-sky-300/70",
+    divider: "border-sky-400/30",
+    iconTile: "bg-sky-400 text-[#0b1f3a]",
+    chip: "bg-sky-400/10 text-sky-200 ring-1 ring-sky-400/30",
+    value: "text-sky-50",
+    positive: "text-emerald-300",
+    negative: "text-rose-300",
+    neutral: "text-sky-300/70",
+    accent: "#38bdf8",
+    area: "fill-sky-400/10",
+    heading: "font-mono tracking-[0.02em]",
+  },
+  {
+    key: "terminal",
+    decoration: "grid",
+    name: "Terminal",
+    description: "Black console with green monospace readouts",
+    shell:
+      "border-green-500/35 bg-[#040805] shadow-[inset_0_1px_0_rgba(34,197,94,0.15),0_18px_40px_-30px_rgba(34,197,94,0.5)]",
+    glow: "bg-green-500/20",
+    title: "text-green-300",
+    muted: "text-green-500/60",
+    divider: "border-green-500/25",
+    iconTile: "bg-green-500 text-black",
+    chip: "bg-green-500/10 text-green-300 ring-1 ring-green-500/30",
+    value: "text-green-200",
+    positive: "text-green-400",
+    negative: "text-rose-400",
+    neutral: "text-green-500/60",
+    accent: "#22c55e",
+    area: "fill-green-500/10",
+    heading: "font-mono tracking-[-0.02em]",
   },
 ];
 

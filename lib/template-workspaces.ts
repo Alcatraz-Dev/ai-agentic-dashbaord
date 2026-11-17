@@ -120,11 +120,13 @@ const WORKBENCHES: Record<TemplateWorkbenchId, TemplateWorkbench> = {
   developer: {
     id: "developer",
     label: "Project",
-    blurb: "The repository this workspace runs from: folders, files, changes and a read-only shell.",
+    blurb:
+      "Read this project's files, review uncommitted changes and use a read-only shell. Nothing is written unless you save a reviewed edit.",
     tabs: [
       { id: "files", label: "Files" },
       { id: "changes", label: "Changes" },
       { id: "terminal", label: "Terminal" },
+      { id: "team", label: "Team" },
     ],
     prompts: [
       {
@@ -133,9 +135,9 @@ const WORKBENCHES: Record<TemplateWorkbenchId, TemplateWorkbench> = {
           "What is open in review, what is failing, and who is blocked across my repositories? Link each item.",
       },
       {
-        label: "Explain this file",
+        label: "Explain a file",
         prompt:
-          "Read the file I have open in the project pane and explain what it does, what calls it and what would break if it changed.",
+          "Ask me which file if I have not named one, then read it with read_project_file and explain what it does, what calls it and what would break if it changed.",
       },
       {
         label: "Draft the fix",
@@ -176,6 +178,113 @@ const WORKBENCHES: Record<TemplateWorkbenchId, TemplateWorkbench> = {
 /** The workbench for a dashboard template, or null for blank / unknown. */
 export function getTemplateWorkbench(template: string): TemplateWorkbench | null {
   return WORKBENCHES[template as TemplateWorkbenchId] ?? null;
+}
+
+/**
+ * What a template's runs are allowed to reach.
+ *
+ * A board is a statement of intent: a publishing desk should not be offered
+ * engineering apps, and a daily desk has no architecture diagrams to load. The
+ * runtime intersects this with the agent's own switches and, for a board card
+ * run, with the card's picks — so a template only ever narrows.
+ */
+export type TemplateToolScope = {
+  /** Composio categories this board's runs may touch; null = every connected app. */
+  appCategories: string[] | null;
+  /** Workspace library groups attached to this board's runs. */
+  skills: boolean;
+  diagrams: boolean;
+  plugins: boolean;
+  /** One line in the system prompt; what this kind of board is for. */
+  guidance: string;
+};
+
+const SCOPES: Record<TemplateWorkbenchId, TemplateToolScope> = {
+  creator: {
+    appCategories: ["Social media", "Design", "Chat"],
+    skills: true,
+    diagrams: false,
+    plugins: true,
+    guidance:
+      "Draft in the owner's own voice, name the platform and the format for every idea, and treat reach, clicks and follower numbers as data you read from a connected app — never as estimates. The board tracks drafts and reviews, so put publishable work there instead of only describing it.",
+  },
+  daily: {
+    appCategories: ["Email", "Calendar", "Chat"],
+    skills: true,
+    diagrams: false,
+    plugins: true,
+    guidance:
+      "Lead with what is time-bound: cards with a date, today's calendar and mail that needs a reply today. Do not plan the week unless asked, and never invent a meeting, a deadline or an email.",
+  },
+  business: {
+    appCategories: ["CRM", "Finance", "Project management"],
+    skills: true,
+    diagrams: true,
+    plugins: true,
+    guidance:
+      "Every figure must come from a connected finance or CRM app, with the source and period named. Never estimate revenue, pipeline or runway, and say plainly which numbers you could not read.",
+  },
+  developer: {
+    appCategories: ["Engineering", "Project management", "Chat"],
+    skills: true,
+    diagrams: true,
+    plugins: true,
+    guidance:
+      "Read a file before describing it, name the path you read, and propose a patch instead of describing an edit you did not make. Never claim tests, builds or commands ran unless a tool returned their output.",
+  },
+  research: {
+    appCategories: ["Files", "Email", "Chat"],
+    skills: true,
+    diagrams: true,
+    plugins: true,
+    guidance:
+      "Give a link for every claim, prefer the primary source over an aggregator, and mark anything you could not verify. When a finding should outlive the conversation, say so and save it to memory once.",
+  },
+};
+
+/** The scope for a dashboard template, or null for blank / unknown boards. */
+export function templateRunScope(template: string): TemplateToolScope | null {
+  return SCOPES[template as TemplateWorkbenchId] ?? null;
+}
+
+/** How the pane describes the board's app scope, e.g. "Social media · Design". */
+export function templateAppsLabel(template: string): string | null {
+  const scope = templateRunScope(template);
+  if (!scope) return null;
+  return scope.appCategories ? scope.appCategories.join(" · ") : "every connected";
+}
+
+/**
+ * Whether a board's runs may touch an app in this category.
+ *
+ * One rule, shared by the app tools, the Composio session and the chat
+ * composer's app strip, so the three can never disagree. A blank or unknown
+ * board allows everything.
+ */
+export function templateAllowsAppCategory(
+  template: string | null | undefined,
+  category: string | null | undefined,
+): boolean {
+  const scope = templateRunScope(template ?? "");
+  if (!scope?.appCategories) return true;
+  return Boolean(category && scope.appCategories.includes(category));
+}
+
+/**
+ * The message an app tool returns for an app this board excludes, or null when
+ * it is allowed. Naming the board matters: "not connected" would be a lie when
+ * the app is connected on another dashboard.
+ */
+export function templateAppRefusal(
+  template: string,
+  category: string | null | undefined,
+): string | null {
+  if (templateAllowsAppCategory(template, category)) return null;
+
+  const categories = templateRunScope(template)?.appCategories ?? [];
+  return `This dashboard's template (${template} board) only allows ${categories.join(
+    ", ",
+  )} apps, and this one is categorised as ${category || "something else"}. Tell the owner it belongs on a dashboard built for that kind of work instead of running it here.`;
 }
 
 /** True when the template opens the repository pane. */

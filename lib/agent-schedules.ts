@@ -387,6 +387,7 @@ export async function runAgentSchedule(
         ownerId: agents.ownerId,
         name: agents.name,
         provider: agents.provider,
+        objective: agents.objective,
         instructions: agents.instructions,
         approvalMode: agents.approvalMode,
         enabledTools: agents.enabledTools,
@@ -424,6 +425,7 @@ export async function runAgentSchedule(
           id: agent.id,
           name: agent.name,
           provider: agent.provider,
+          objective: agent.objective,
           instructions: agent.instructions,
           // A scheduled run follows the agent's saved approval rule.
           approvalMode: normalizeApprovalMode(agent.approvalMode),

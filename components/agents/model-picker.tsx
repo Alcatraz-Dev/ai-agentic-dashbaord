@@ -80,7 +80,9 @@ export function ModelPicker({
 
       <PopoverContent
         align={align}
-        className={cn("gap-2 p-2", matchTriggerWidth ? "w-(--anchor-width)" : "w-[21rem]")}
+        // Above any dialog/sheet layer: the picker is opened from inside modals
+        // (widget "Edit with AI"), where a z-50 popup could sit underneath.
+        className={cn("z-[70] gap-2 p-2", matchTriggerWidth ? "w-(--anchor-width)" : "w-[21rem]")}
       >
         <div className="relative">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />

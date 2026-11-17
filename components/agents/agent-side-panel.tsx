@@ -57,11 +57,13 @@ import {
   AGENT_APPROVAL_MODES,
   AGENT_INSTRUCTIONS_MAX_LENGTH,
   AGENT_NAME_MAX_LENGTH,
+  AGENT_OBJECTIVE_MAX_LENGTH,
   normalizeApprovalMode,
   type AgentApprovalMode,
   type AgentDetail,
   type AgentModelCatalog,
 } from "@/lib/agent-options";
+import { getTemplateWorkbench, templateRunScope } from "@/lib/template-workspaces";
 import { cn } from "@/lib/utils";
 
 const SECTION_LABEL =
@@ -83,7 +85,7 @@ const BROWSER_NOTES: { icon: LucideIcon; text: string }[] = [
   },
 ];
 
-type Editing = "identity" | "instructions" | null;
+type Editing = "identity" | "objective" | "instructions" | null;
 
 export function AgentSidePanel({
   agent,
@@ -101,6 +103,7 @@ export function AgentSidePanel({
   diagrams = [],
   memoryEnabled = true,
   memoryNotes = [],
+  template = "blank",
 }: {
   agent: AgentDetail;
   catalog: AgentModelCatalog;
@@ -130,6 +133,8 @@ export function AgentSidePanel({
   memoryEnabled?: boolean;
   /** The newest notes this agent keeps. */
   memoryNotes?: AgentMemoryNote[];
+  /** The dashboard's template: it scopes what this agent's runs may reach. */
+  template?: string;
 }) {
   const router = useRouter();
   const { updateAgent } = useAgents();
@@ -151,15 +156,31 @@ export function AgentSidePanel({
   const [name, setName] = useState(agent.name);
   const [avatar, setAvatar] = useState(agent.avatar);
   const [color, setColor] = useState(agent.color);
+  const [objective, setObjective] = useState(agent.objective ?? "");
   const [instructions, setInstructions] = useState(agent.instructions ?? "");
 
   const [editing, setEditing] = useState<Editing>(null);
   const [draftName, setDraftName] = useState(agent.name);
   const [draftAvatar, setDraftAvatar] = useState(agent.avatar);
   const [draftColor, setDraftColor] = useState(agent.color);
+  const [draftObjective, setDraftObjective] = useState(agent.objective ?? "");
   const [draftInstructions, setDraftInstructions] = useState(agent.instructions ?? "");
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+
+  // The board's template is a ceiling on tools, so the rail states it beside the
+  // switches it constrains instead of leaving an unexplained missing app.
+  const boardTemplate = template ? getTemplateWorkbench(template) : null;
+  const boardScope = template ? templateRunScope(template) : null;
+  const boardGroups = boardScope
+    ? [
+        { label: "Skills", on: boardScope.skills },
+        { label: "Diagrams", on: boardScope.diagrams },
+        { label: "Plugins", on: boardScope.plugins },
+      ]
+    : [];
+  const boardGroupsOn = boardGroups.filter((group) => group.on).map((group) => group.label);
+  const boardGroupsOff = boardGroups.filter((group) => !group.on).map((group) => group.label);
 
   const [approvalMode, setApprovalMode] = useState<AgentApprovalMode>(
     normalizeApprovalMode(agent.approvalMode),
@@ -202,6 +223,12 @@ export function AgentSidePanel({
     setDraftColor(color);
     setError(null);
     setEditing("identity");
+  }
+
+  function startObjectiveEdit() {
+    setDraftObjective(objective);
+    setError(null);
+    setEditing("objective");
   }
 
   function startInstructionsEdit() {
@@ -266,6 +293,7 @@ export function AgentSidePanel({
     name: string;
     avatar: string;
     color: string;
+    objective: string;
     instructions: string;
   }) {
     if (isSaving) return;
@@ -285,6 +313,7 @@ export function AgentSidePanel({
         name: trimmedName,
         avatar: values.avatar,
         color: values.color,
+        objective: values.objective,
         instructions: values.instructions,
       });
 
@@ -297,6 +326,7 @@ export function AgentSidePanel({
       setAvatar(result.agent.avatar);
       setColor(result.agent.color);
       setProviderId(result.agent.provider);
+      setObjective(result.agent.objective ?? "");
       setInstructions(result.agent.instructions ?? "");
       setEditing(null);
       // Push the edit into the client agent list so the sidebar avatar and name
@@ -313,12 +343,17 @@ export function AgentSidePanel({
 
   function handleIdentitySubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void save({ name: draftName, avatar: draftAvatar, color: draftColor, instructions });
+    void save({ name: draftName, avatar: draftAvatar, color: draftColor, objective, instructions });
+  }
+
+  function handleObjectiveSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void save({ name, avatar, color, objective: draftObjective, instructions });
   }
 
   function handleInstructionsSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void save({ name, avatar, color, instructions: draftInstructions });
+    void save({ name, avatar, color, objective, instructions: draftInstructions });
   }
 
   return (
@@ -478,9 +513,46 @@ export function AgentSidePanel({
             skills={skills}
             plugins={plugins}
             diagrams={diagrams}
+            scope={boardScope}
           />
 
           <Separator className="my-3.5 bg-border/60" />
+
+          {boardScope ? (
+            <>
+              <div className="flex items-center justify-between gap-2">
+                <p className={SECTION_LABEL}>This board</p>
+                <span className="text-[0.65rem] text-muted-foreground">
+                  {boardTemplate?.label ?? template}
+                </span>
+              </div>
+
+              <p className="mt-2 text-[0.68rem] leading-relaxed text-muted-foreground">
+                This dashboard&apos;s template sets what its runs may reach, so the switches above
+                can only narrow it — never widen it.
+              </p>
+
+              <div className="mt-2 space-y-1 text-[0.68rem] leading-relaxed">
+                <p>
+                  <span className="font-medium">Apps</span>{" "}
+                  <span className="text-muted-foreground">
+                    {boardScope.appCategories
+                      ? boardScope.appCategories.join(" · ")
+                      : "Every connected app"}
+                  </span>
+                </p>
+                <p>
+                  <span className="font-medium">Library</span>{" "}
+                  <span className="text-muted-foreground">
+                    {boardGroupsOn.length > 0 ? boardGroupsOn.join(", ") : "None"} on
+                    {boardGroupsOff.length > 0 ? `; ${boardGroupsOff.join(", ")} off` : ""}
+                  </span>
+                </p>
+              </div>
+
+              <Separator className="my-3.5 bg-border/60" />
+            </>
+          ) : null}
 
           <AgentMemorySection
             agentId={agent.id}
@@ -554,6 +626,86 @@ export function AgentSidePanel({
             enabled={agent.mcpTools}
             notice={mcpNotice}
           />
+
+          <Separator className="my-3.5 bg-border/60" />
+
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[0.65rem] font-semibold tracking-[0.1em] text-muted-foreground uppercase">
+              Objective
+            </p>
+            {editing === null && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Edit objective"
+                onClick={startObjectiveEdit}
+                className="text-muted-foreground"
+              >
+                <Pencil className="size-3" />
+              </Button>
+            )}
+          </div>
+
+          {editing === "objective" ? (
+            <form onSubmit={handleObjectiveSubmit} className="mt-2 space-y-2" noValidate>
+              <TextArea
+                value={draftObjective}
+                onChange={(event) => {
+                  setDraftObjective(event.target.value);
+                  if (error) setError(null);
+                }}
+                maxLength={AGENT_OBJECTIVE_MAX_LENGTH}
+                minRows={2}
+                maxRows={5}
+                counter
+                autoFocus
+                aria-label="Agent objective"
+                placeholder="What should this agent achieve, e.g. keep my inbox at zero and flag anything urgent?"
+              />
+              <div className="flex items-center justify-end gap-2">
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={cancelEdit}
+                    disabled={isSaving}
+                    className="rounded-lg text-muted-foreground"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={isSaving}
+                    className="gap-1.5 rounded-lg bg-foreground text-background shadow-sm hover:bg-foreground/90"
+                  >
+                    {isSaving ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Check className="size-3.5" />
+                    )}
+                    Save
+                  </Button>
+                </div>
+              </div>
+              {error && (
+                <p role="alert" className="text-[0.72rem] text-destructive">
+                  {error}
+                </p>
+              )}
+            </form>
+          ) : (
+            <button
+              type="button"
+              onClick={startObjectiveEdit}
+              aria-label="Edit objective"
+              className="mt-1.5 block w-full rounded-xl bg-muted/50 p-3 text-left text-[0.78rem] leading-relaxed whitespace-pre-wrap text-muted-foreground transition hover:bg-muted/70"
+            >
+              {objective || "No objective yet. Add one line on what this agent is for."}
+            </button>
+          )}
 
           <Separator className="my-3.5 bg-border/60" />
 

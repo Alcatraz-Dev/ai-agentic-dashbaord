@@ -9,6 +9,7 @@ import {
   MousePointerClick,
   ScanText,
   Search,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 
@@ -64,6 +65,11 @@ const PLUGIN_LOOK: Record<AgentToolId, { icon: LucideIcon; tone: string; group: 
     icon: Clock,
     tone: "bg-muted text-foreground ring-border",
     group: "Utilities",
+  },
+  ask_teammate: {
+    icon: Users,
+    tone: "bg-muted text-foreground ring-border",
+    group: "Team",
   },
 };
 

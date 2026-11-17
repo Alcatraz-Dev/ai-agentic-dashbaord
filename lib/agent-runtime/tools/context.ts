@@ -9,6 +9,7 @@ import type { AgentModelConnection } from "@/lib/agent-runtime/models";
 import type { AgentApprovalMode } from "@/lib/agent-options";
 import type { ScheduleActionPolicy, ScheduleSentAction } from "@/lib/schedule-action";
 import type { TaskProposal, TaskToolSelection } from "@/lib/task-types";
+import type { AgentHandoffResult } from "@/lib/agent-team";
 
 export { AGENT_TOOL_LIMITS };
 
@@ -65,6 +66,12 @@ export type AgentToolRunState = {
    */
   widgetEdits: import("@/lib/widget-types").WidgetEditProposal[];
   /**
+   * Proposed file patches for attached projects, forwarded as `project_patch`
+   * review cards. The write happens only when the owner clicks Apply, and only
+   * if the file still hashes to the proposal's `beforeHash`.
+   */
+  projectPatches: import("@/lib/project-patch").ProjectPatchProposal[];
+  /**
    * Schedule confirmation cards proposed this turn. Nothing is scheduled until
    * the owner edits (if needed) and clicks Confirm.
    */
@@ -79,6 +86,11 @@ export type AgentToolRunState = {
    * `memory_saved` event, so the owner sees exactly what the agent will keep.
    */
   memoryNotes: { id: number; content: string; tags: string[] }[];
+  /**
+   * Hand-offs this turn made to teammates. The runner forwards each one as a
+   * `handoff` card, so the owner sees which teammate answered and with what.
+   */
+  handoffs: AgentHandoffResult[];
   /**
    * Actions waiting for the owner's approval. The runner streams one
    * approval_request per entry; the token is the only way to run them and it
@@ -141,6 +153,13 @@ export type AgentToolRunState = {
    */
   browser: CloudBrowserSession | null;
   /**
+   * The dashboard template this run belongs to. Its scope is a ceiling on apps:
+   * the app tools refuse a toolkit outside the template's categories even when
+   * the model types the slug directly, so the board's rule is enforced rather
+   * than only described in the prompt.
+   */
+  template: string | null;
+  /**
    * The chat request's abort signal, so a tool that waits (the sign-in request)
    * stops as soon as the reader goes away.
    */
@@ -164,9 +183,11 @@ export function createAgentToolRunState(
     widgetProposals: [],
     layoutProposals: [],
     widgetEdits: [],
+    projectPatches: [],
     scheduleProposals: [],
     taskProposals: [],
     memoryNotes: [],
+    handoffs: [],
     approvals: [],
     approvalMode: "ask",
     scheduledAction: null,
@@ -177,6 +198,7 @@ export function createAgentToolRunState(
     ownerId,
     agentId,
     browser: null,
+    template: null,
     signal,
   };
 }

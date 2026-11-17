@@ -18,6 +18,7 @@ import {
 } from "@/lib/agents/approvals";
 import { guardScheduledActionArgs } from "@/lib/schedule-action";
 import type { AgentToolRunState } from "@/lib/agent-runtime/tools/context";
+import { templateAppRefusal } from "@/lib/template-workspaces";
 import {
   INTEGRATIONS,
   INTEGRATION_SLUGS,
@@ -190,6 +191,9 @@ export const checkAppConnection: Tool<AgentToolRunState> = tool<
     if (!slug) return `Unknown app "${toolkit}". Use a Composio toolkit slug. Common apps: ${APP_NAMES}.`;
 
     const definition = getIntegration(slug)!;
+    const refused = templateAppRefusal(state.template ?? "", definition.category);
+    if (refused) return refused;
+
     const result = await requireConnection(state, slug, reason?.trim() || `to finish this request`);
 
     if ("message" in result) return result.message;
@@ -229,6 +233,9 @@ export const appFindActions: Tool<AgentToolRunState> = tool<
     if (!slug) return `Unknown app "${toolkit}". Use a Composio toolkit slug. Common apps: ${APP_NAMES}.`;
 
     const definition = getIntegration(slug)!;
+    const refused = templateAppRefusal(state.template ?? "", definition.category);
+    if (refused) return refused;
+
     const connection = await requireConnection(state, slug, `to look up its actions`);
     if ("message" in connection) return connection.message;
 
@@ -286,6 +293,9 @@ export const appRunAction: Tool<AgentToolRunState> = tool<typeof runParameters, 
     if (!slug) return `Unknown app "${toolkit}". Use a Composio toolkit slug. Common apps: ${APP_NAMES}.`;
 
     const definition = getIntegration(slug)!;
+    const refused = templateAppRefusal(state.template ?? "", definition.category);
+    if (refused) return refused;
+
     const connection = await requireConnection(state, slug, reason?.trim() || `to run ${action}`);
     if ("message" in connection) return connection.message;
 

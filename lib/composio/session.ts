@@ -30,22 +30,31 @@ export type ComposioMcpServer = {
  * as "no external tools" rather than thrown.
  */
 /**
- * `onlyToolkits` narrows the session to the apps a board card picked: the
- * session still cannot reach anything the owner has not connected, and an
- * empty pick means no apps at all.
+ * `onlyToolkits` narrows the session to the apps a board card picked, and
+ * `onlyCategories` to the app categories its dashboard template is for. Both
+ * are ceilings: the session still cannot reach anything the owner has not
+ * connected, and an empty pick means no apps at all.
  */
 export async function getComposioMcpServer(
   ownerId: number,
   onlyToolkits?: string[] | null,
+  onlyCategories?: string[] | null,
 ): Promise<ComposioMcpServer | null> {
   if (!isComposioConfigured()) return null;
 
   try {
     const connected = await getConnectedToolkits(ownerId);
-    const toolkits =
+    let toolkits =
       onlyToolkits === undefined || onlyToolkits === null
         ? connected
         : connected.filter((slug) => onlyToolkits.includes(slug));
+
+    if (onlyCategories && onlyCategories.length > 0) {
+      toolkits = toolkits.filter((slug) => {
+        const category = getIntegration(slug)?.category ?? "";
+        return onlyCategories.includes(category);
+      });
+    }
 
     if (toolkits.length === 0) return null;
 

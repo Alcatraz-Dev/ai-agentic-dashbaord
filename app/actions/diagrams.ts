@@ -289,10 +289,17 @@ export async function createDiagramWidgetAction(input: {
     const diagram = await getCustomDiagramForUser(profile.id, diagramId);
     if (!diagram) return { ok: false, error: "That diagram could not be found." };
 
-    const agents = await listAgentsForUser(profile.id);
+    // The card lands on the active dashboard, so its owning agent has to be one
+    // of that board's agents; older agents (no board) still qualify.
+    const dashboardAgents = await listAgentsForUser(profile.id, dashboard.id);
+    const agents =
+      dashboardAgents.length > 0 ? dashboardAgents : await listAgentsForUser(profile.id);
     const agent = agents[0];
     if (!agent) {
-      return { ok: false, error: "Create an AI agent first — every widget belongs to one." };
+      return {
+        ok: false,
+        error: "Create an AI agent on this dashboard first — every widget belongs to one.",
+      };
     }
 
     const widget = await createDiagramWidgetForUser({

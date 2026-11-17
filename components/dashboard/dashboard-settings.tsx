@@ -369,7 +369,9 @@ export function DashboardSettings({
         </p>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2">
+      {/* One action bar, pinned to the bottom of the settings sheet, matching
+          the customize drawer instead of a loose button row mid-page. */}
+      <div className="sticky bottom-0 z-10 flex flex-wrap items-center gap-2 rounded-2xl border border-border/70 bg-card/95 px-3 py-2.5 shadow-[0_-8px_24px_-20px_rgba(15,23,42,0.45)] backdrop-blur">
         <Button type="submit" disabled={saving || !dirty} className="gap-2 rounded-xl">
           {saving ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
           {saving ? "Saving…" : dirty ? "Save changes" : "Saved"}
@@ -383,11 +385,18 @@ export function DashboardSettings({
         >
           Back to dashboard
         </Button>
-        {saved && !dirty ? (
+        {dirty ? (
+          <span className="rounded-full border border-brand-border bg-brand-soft/60 px-2 py-0.5 text-[0.62rem] font-medium text-brand-ink">
+            Unsaved
+          </span>
+        ) : saved ? (
           <span role="status" className="text-[0.72rem] font-medium text-emerald-700">
             All changes saved
           </span>
         ) : null}
+        <span className="ml-auto hidden text-[0.62rem] text-muted-foreground sm:block">
+          Applies to this dashboard only
+        </span>
       </div>
 
       <div className="rounded-2xl border border-rose-200 bg-rose-50/40 p-4 sm:p-5 dark:border-rose-500/20 dark:bg-rose-500/5">

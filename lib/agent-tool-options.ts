@@ -12,7 +12,8 @@ export type AgentToolId =
   | "browser_extract"
   | "browser_request_login"
   | "calculate"
-  | "current_time";
+  | "current_time"
+  | "ask_teammate";
 
 export type AgentToolOption = {
   id: AgentToolId;
@@ -89,6 +90,14 @@ export const AGENT_TOOL_OPTIONS: AgentToolOption[] = [
     label: "Checking the time",
     description: "Get today's date and clock time in any time zone.",
     summary: "Get the current date and time (optionally in an IANA time zone).",
+  },
+  {
+    id: "ask_teammate",
+    name: "Teammates",
+    label: "Asking a teammate",
+    description: "Hand one subtask to another agent on this dashboard, and use their answer.",
+    summary:
+      "Hand one self-contained subtask to a teammate agent on this dashboard and get their answer back; use it when the work clearly belongs to that teammate's job.",
   },
 ];
 

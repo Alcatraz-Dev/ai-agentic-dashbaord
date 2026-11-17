@@ -12,6 +12,8 @@ import {
 } from "@openai/agents";
 
 import { getAgentMcpServerConfigs } from "@/lib/agent-mcp";
+import { getDashboardTemplateForAgent } from "@/lib/dashboards";
+import { getTemplateWorkbench, templateRunScope } from "@/lib/template-workspaces";
 import { listCustomPluginsForRuntime } from "@/lib/custom-plugins";
 import { listCustomSkillsForRuntime } from "@/lib/custom-skills";
 import { listToolkitActions } from "@/lib/composio/client";
@@ -19,8 +21,12 @@ import { composioApiKey } from "@/lib/composio/config";
 import { getComposioMcpServer } from "@/lib/composio/session";
 import { INTEGRATIONS, getIntegration } from "@/lib/integrations/catalog";
 
-import { hasBrowserTools } from "@/lib/agent-tool-options";
+import { hasBrowserTools, resolveAgentToolIds } from "@/lib/agent-tool-options";
 import type { AgentDetail } from "@/lib/agent-options";
+import { listAgentsForUser } from "@/lib/agents";
+import { getTeamForUser } from "@/lib/teams";
+import { TEAM_LIMITS, type AgentTeammate } from "@/lib/agent-team";
+import { createTeammateTool } from "@/lib/agent-runtime/tools/team";
 import { resolveAgentConnection, supportsReasoningEffort } from "@/lib/agent-runtime/models";
 import { readRunUsage } from "@/lib/agent-runtime/usage";
 import { agentRunLimitError, recordAgentUsage } from "@/lib/plan-usage";
@@ -75,6 +81,7 @@ export type AgentRuntimeAgent = Pick<
   AgentDetail,
   | "name"
   | "provider"
+  | "objective"
   | "instructions"
   | "enabledTools"
   | "mcpTools"
@@ -87,6 +94,10 @@ export type AgentRuntimeAgent = Pick<
   id: number;
   /** Needed to look up a model the agent owner connected themselves. */
   ownerId: number;
+  /** The board the agent works on: its teammates are that board's agents. */
+  dashboardId?: number | null;
+  /** When set, the run's teammates are exactly this team's members. */
+  teamId?: number | null;
 };
 
 /** Enough context to stay coherent without sending an unbounded transcript. */
@@ -218,6 +229,11 @@ export type AgentRunHooks = {
    * stores them beside its reply, so history shows what the agent looked up.
    */
   onRecalled?: (memories: { id: number; content: string }[]) => void;
+  /**
+   * 1 for a hand-off run. A teammate answers the one brief it was given, so it
+   * gets no hand-off tool of its own and the chain cannot loop.
+   */
+  depth?: number;
 };
 
 export async function* streamAgentReply(
@@ -304,6 +320,71 @@ export async function* streamAgentReply(
     return { enabled: false, memories: [] as { id: number; content: string; tags: string[] }[] };
   });
 
+  // The board the agent belongs to scopes the run. It is read from the agent's
+  // own dashboard, so a chat opened from another board still obeys this one.
+  const template = await getDashboardTemplateForAgent(agent.ownerId, agent.id).catch((error) => {
+    console.error("[agents] could not read the dashboard template", error);
+    return null;
+  });
+  // The app tools read this and enforce the same ceiling the Composio session
+  // applies, so a slug the model types itself cannot reach an app this board's
+  // template excludes.
+  toolState.template = template;
+  const templateScope = templateRunScope(template ?? "");
+  const templateWorkbench = getTemplateWorkbench(template ?? "");
+  // A template can switch a whole library group off; null means no narrowing.
+  const templateSkills = templateScope?.skills === false ? [] : null;
+  const templatePlugins = templateScope?.plugins === false ? [] : null;
+  const templateDiagrams = templateScope?.diagrams === false ? [] : null;
+
+  // Teammates are the agents on this agent's own board, and only when the
+  // hand-off tool is switched on. An agent with no board has no team, and a
+  // hand-off run is depth 1, so two agents cannot pass one task back and forth.
+  const teamEnabled = resolveAgentToolIds(agent.enabledTools).includes("ask_teammate");
+  // A team is the tighter boundary: when the agent is on one, its teammates are
+  // exactly that roster and the prompt names the team. Agents with no team keep
+  // the board-wide list they had before.
+  const teamRoster =
+    (hooks?.depth ?? 0) === 0 && teamEnabled && typeof agent.teamId === "number"
+      ? await getTeamForUser(agent.ownerId, agent.teamId).catch((error) => {
+          console.error("[agents] could not read this agent's team", error);
+          return null;
+        })
+      : null;
+
+  const teammates: AgentTeammate[] = teamRoster
+    ? teamRoster.members
+        .filter((member) => member.id !== agent.id)
+        .slice(0, TEAM_LIMITS.teammatesMax)
+        .map((member) => ({
+          id: member.id,
+          name: member.name,
+          objective: member.objective,
+          avatar: member.avatar,
+          color: member.color,
+          provider: member.provider,
+        }))
+    : (hooks?.depth ?? 0) === 0 && teamEnabled && typeof agent.dashboardId === "number"
+      ? await listAgentsForUser(agent.ownerId, agent.dashboardId)
+          .then((list) =>
+            list
+              .filter((entry) => entry.id !== agent.id)
+              .slice(0, TEAM_LIMITS.teammatesMax)
+              .map((entry) => ({
+                id: entry.id,
+                name: entry.name,
+                objective: entry.objective,
+                avatar: entry.avatar,
+                color: entry.color,
+                provider: entry.provider,
+              })),
+          )
+          .catch((error) => {
+            console.error("[agents] could not read this board's teammates", error);
+            return [] as AgentTeammate[];
+          })
+      : [];
+
   // A board card's own picks narrow the run. No card means no narrowing, so
   // chat turns still get the whole workspace.
   const cardPolicy = cardToolScope(hooks?.cardTools);
@@ -333,17 +414,17 @@ export async function* streamAgentReply(
   );
   // A board card narrows the run further, never widens it.
   const allowedSkills = scopeList(
-    agentSkills,
+    scopeList(agentSkills, templateSkills, (skill) => skill.name),
     cardPolicy ? cardPolicy.skills : null,
     (skill) => skill.name,
   );
   const allowedPlugins = scopeList(
-    agentPlugins,
+    scopeList(agentPlugins, templatePlugins, (plugin) => plugin.slug),
     cardPolicy ? cardPolicy.plugins : null,
     (plugin) => plugin.slug,
   );
   const allowedDiagrams = scopeList(
-    agentDiagrams,
+    scopeList(agentDiagrams, templateDiagrams, (diagram) => diagram.name),
     cardPolicy ? cardPolicy.diagrams : null,
     (diagram) => diagram.name,
   );
@@ -405,6 +486,8 @@ export async function* streamAgentReply(
     const composio = await getComposioMcpServer(
       agent.ownerId,
       cardPolicy ? cardPolicy.apps : null,
+      // The board's own app scope is the outer ceiling; a card narrows inside it.
+      templateScope?.appCategories ?? null,
     );
     const composioKey = composioApiKey();
     if (composio && composioKey) {
@@ -462,6 +545,7 @@ export async function* streamAgentReply(
       ...(allowedSkills.length > 0 ? [createUseSkillTool(allowedSkills)] : []),
       ...(allowedDiagrams.length > 0 ? [createUseDiagramTool(allowedDiagrams)] : []),
       ...createCustomPluginTools(allowedPlugins),
+      ...(teammates.length > 0 ? [createTeammateTool(teammates, teamRoster?.name ?? null)] : []),
       ...(memory.enabled ? MEMORY_TOOLS : []),
     ];
     const toolSummaries = [
@@ -485,6 +569,15 @@ export async function* streamAgentReply(
           ]
         : []),
       ...listCustomPluginToolSummaries(allowedPlugins),
+      ...(teammates.length > 0
+        ? [
+            {
+              name: "ask_teammate",
+              summary:
+                "Hand one self-contained subtask to a teammate agent and get their answer back.",
+            },
+          ]
+        : []),
       ...(memory.enabled ? MEMORY_TOOL_SUMMARIES : []),
     ];
 
@@ -492,6 +585,7 @@ export async function* streamAgentReply(
       name: agent.name,
       instructions: buildAgentInstructions({
         name: agent.name,
+        objective: agent.objective,
         instructions: agent.instructions,
         tools: toolSummaries,
         skills: listCustomSkillSummaries(allowedSkills),
@@ -501,7 +595,15 @@ export async function* streamAgentReply(
         availableApps: INTEGRATIONS.map((integration) => integration.name),
         signedInSites,
         memories: memory.memories,
+        teammates,
+        team: teamRoster ? { name: teamRoster.name, objective: teamRoster.objective } : null,
+        handoffLimit: TEAM_LIMITS.handoffsPerReply,
         scheduledAction: hooks?.scheduledAction ?? null,
+        template:
+          templateScope && templateWorkbench
+            ? { label: templateWorkbench.label, guidance: templateScope.guidance }
+            : null,
+        appScope: templateScope?.appCategories ?? null,
       }),
       tools: [...getAgentTools(agent.enabledTools), ...customTools],
       mcpServers: readyMcp,
@@ -518,7 +620,39 @@ export async function* streamAgentReply(
     runResult = result;
 
     let emittedText = false;
-    let activeTool: { name: string; label: string } | null = null;
+    let activeTool: { name: string; label: string; detail?: string } | null = null;
+
+    /**
+     * What a tool call is working on, read from its own arguments, so the chat's
+     * step list can say `/lib/tasks.ts` instead of only "Reading a project file".
+     */
+    const detailOf = (name: string, rawItem: unknown): string | undefined => {
+      const args = (rawItem as { arguments?: unknown } | null)?.arguments;
+      if (typeof args !== "string") return undefined;
+
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(args) as Record<string, unknown>;
+      } catch {
+        return undefined;
+      }
+
+      const text = (key: string) => {
+        const value = parsed[key];
+        return typeof value === "string" && value.trim() ? value.trim() : undefined;
+      };
+
+      if (name === "read_project_file" || name === "propose_project_patch") return text("path");
+      if (name === "list_project_files") return text("path") ?? "root";
+      if (name === "search_project") {
+        const query = text("query");
+        return query ? `"${query}"` : undefined;
+      }
+      if (name === "web_search") return text("query");
+      if (name === "ask_teammate") return text("teammate");
+
+      return undefined;
+    };
     let announcedBrowser = false;
     /** Connect cards already sent this turn; one per app. */
     const announcedConnections = new Set<string>();
@@ -537,8 +671,12 @@ export async function* streamAgentReply(
     const announcedScheduleProposals = new Set<string>();
     /** Task cards already sent this turn; each proposal has its own id. */
     const announcedTaskProposals = new Set<string>();
+    /** Project patch reviews already sent this turn. */
+    const announcedProjectPatches = new Set<string>();
     /** Memories already confirmed in the chat, so one save is one card. */
     const announcedMemories = new Set<number>();
+    /** Hand-offs already shown, so one teammate answer is one card. */
+    const announcedHandoffs = new Set<string>();
 
     for await (const event of result) {
       if (signal?.aborted) return;
@@ -555,7 +693,11 @@ export async function* streamAgentReply(
 
       if (event.name === "tool_called" && event.item.type === "tool_call_item") {
         const name = toolCallName(event.item.rawItem) ?? "tool";
-        activeTool = { name, label: getAgentToolLabel(name) };
+        activeTool = {
+          name,
+          label: getAgentToolLabel(name),
+          detail: detailOf(name, event.item.rawItem),
+        };
         yield { type: "tool_started", ...activeTool };
       } else if (event.name === "tool_output" && event.item.type === "tool_call_output_item") {
         if (activeTool) {
@@ -681,12 +823,27 @@ export async function* streamAgentReply(
           yield { type: "task_proposal", proposal };
         }
 
+        // A file patch is reviewed before it exists: the card's Apply writes it.
+        for (const proposal of toolState.projectPatches) {
+          if (announcedProjectPatches.has(proposal.id)) continue;
+          announcedProjectPatches.add(proposal.id);
+          yield { type: "project_patch", proposal };
+        }
+
         // A saved memory is durable, so the chat says what was kept instead of
         // leaving the owner with only the model's own claim.
         for (const memory of toolState.memoryNotes) {
           if (announcedMemories.has(memory.id)) continue;
           announcedMemories.add(memory.id);
           yield { type: "memory_saved", memory };
+        }
+
+        // A teammate answered: the card carries what they were asked and the
+        // real reply, so the lead's summary can be checked against it.
+        for (const handoff of toolState.handoffs) {
+          if (announcedHandoffs.has(handoff.id)) continue;
+          announcedHandoffs.add(handoff.id);
+          yield { type: "handoff", handoff };
         }
       }
     }
